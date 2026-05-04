@@ -1232,4 +1232,4 @@ class WPHackerAI:
         if context['company']:
             print(f"{Fore.GREEN}[+] Company: {context['company']}{Style.RESET_ALL}")
         if context['year']:
-            print(f"{Fore.GREEN}[+] Year:
+            print(f"{Fore.GREEN}[+] Year: ")
