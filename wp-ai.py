@@ -92,23 +92,20 @@ class Colors:
     FAIL = Fore.RED + Style.BRIGHT
     INFO = Fore.CYAN + Style.BRIGHT
     RESULT = Fore.WHITE + Style.BRIGHT
-    DIM = Fore.LIGHTBLACK_EX
+    DIM = Style.DIM  # ❌ OPRAVA: místo Style.DIM použij Style.DIM
     BOLD = Style.BRIGHT
     
     @staticmethod
     def status(success, text):
-        """Vrátí formátovaný status řádek"""
         icon = f"{Fore.GREEN}[✓]{Style.RESET_ALL}" if success else f"{Fore.RED}[✗]{Style.RESET_ALL}"
         return f"{icon} {text}"
 
     @staticmethod
     def section(title):
-        """Vrátí formátovaný nadpis sekce"""
         return f"\n{Fore.CYAN}{Style.BRIGHT}{' ' + title + ' ':=^60}{Style.RESET_ALL}\n"
 
     @staticmethod
     def finding(label, value, status="info"):
-        """Formátované nalezení"""
         colors = {"info": Fore.CYAN, "success": Fore.GREEN, "danger": Fore.RED, "warning": Fore.YELLOW}
         c = colors.get(status, Fore.WHITE)
         return f"  {Fore.WHITE}▸ {label}: {c}{Style.BRIGHT}{value}{Style.RESET_ALL}"
@@ -130,7 +127,7 @@ class LiveOutput:
     def info(self, message):
         """Informační zpráva"""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"  {Fore.DIM}[{timestamp}]{Style.RESET_ALL} {Fore.WHITE}{message}{Style.RESET_ALL}")
+        print(f"  {Style.DIM}[{timestamp}]{Style.RESET_ALL} {Fore.WHITE}{message}{Style.RESET_ALL}")
     
     def success(self, message):
         """Úspěch"""
@@ -155,20 +152,20 @@ class LiveOutput:
     
     def result_line(self, key, value, color=Fore.WHITE):
         """Zobrazí pár klíč-hodnota"""
-        print(f"    {Fore.DIM}├─{Style.RESET_ALL} {Fore.WHITE}{key}: {color}{Style.BRIGHT}{value}{Style.RESET_ALL}")
+        print(f"    {Style.DIM}├─{Style.RESET_ALL} {Fore.WHITE}{key}: {color}{Style.BRIGHT}{value}{Style.RESET_ALL}")
     
     def separator(self):
         """Oddělovač"""
-        print(f"  {Fore.DIM}{'─' * 55}{Style.RESET_ALL}")
+        print(f"  {Style.DIM}{'─' * 55}{Style.RESET_ALL}")
     
     def brute_force_progress(self, current, total, username, password, status=""):
         """Live progress brute-force"""
         if total == 0:
-            total = 1  # Prevence dělení nulou
+            total = 1
         percent = (current / total * 100)
         bar_len = 30
         filled = int(bar_len * current // total)
-        bar = f"{Fore.GREEN}{'█' * filled}{Fore.DIM}{'░' * (bar_len - filled)}{Style.RESET_ALL}"
+        bar = f"{Fore.GREEN}{'█' * filled}{Style.DIM}{'░' * (bar_len - filled)}{Style.RESET_ALL}"
         
         status_color = Fore.GREEN if "SUCCESS" in status else (Fore.RED if "FAIL" in status else Fore.YELLOW)
         
@@ -277,7 +274,7 @@ class TcpIpFingerprinter:
                     self.output.result_line("TTL odhad", "Probíhá...", Fore.YELLOW)
                     self.output.add_finding("OS odhad", "Server detekován (TTL analýza přes HTTP)", "info")
                 except Exception as e:
-                    self.output.result_line("TTL odhad", f"Nedostupný: {str(e)[:30]}", Fore.DIM)
+                    self.output.result_line("TTL odhad", f"Nedostupný: {str(e)[:30]}", Style.DIM)
                     
             except Exception as e:
                 self.output.result_line("IP adresa", f"Chyba: {str(e)[:30]}", Fore.RED)
@@ -1439,7 +1436,7 @@ class AIReportGenerator:
                      f"{Fore.CYAN}{len(infos)} informací{Style.RESET_ALL}")
         report.append(f"  🔐 Nalezená hesla: {Fore.GREEN}{len(brute_force_results)}{Style.RESET_ALL}")
         report.append(f"{Fore.CYAN}{Style.BRIGHT}{'=' * 65}{Style.RESET_ALL}")
-        report.append(f"\n{Fore.DIM}Report generován: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
+        report.append(f"\n{Style.DIM}Report generován: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
         report.append(f"WP-BREAKER PRO v{VERSION} | HackerAI Security Research{Style.RESET_ALL}")
         
         # Výpis reportu
@@ -1486,7 +1483,7 @@ def print_banner():
     print(f"  {Fore.CYAN}{Style.BRIGHT}► Cíl:{Style.RESET_ALL} {Fore.WHITE}{TARGET}{Style.RESET_ALL}")
     print(f"  {Fore.CYAN}{Style.BRIGHT}► Verze:{Style.RESET_ALL} {Fore.WHITE}v{VERSION}{Style.RESET_ALL}")
     print(f"  {Fore.CYAN}{Style.BRIGHT}► Datum:{Style.RESET_ALL} {Fore.WHITE}{datetime.now().strftime('%d.%m.%Y %H:%M')}{Style.RESET_ALL}")
-    print(f"  {Fore.DIM}{'─' * 50}{Style.RESET_ALL}")
+    print(f"  {Style.DIM}{'─' * 50}{Style.RESET_ALL}")
 
 
 def show_menu():
@@ -1508,7 +1505,7 @@ def show_menu():
     
     for num, name, desc, color in menu_items:
         print(f"  {Fore.WHITE}[{color}{num}{Fore.WHITE}] {color}{Style.BRIGHT}{name}{Style.RESET_ALL}")
-        print(f"      {Fore.DIM}{desc}{Style.RESET_ALL}")
+        print(f"      {Style.DIM}{desc}{Style.RESET_ALL}")
     
     print(f"{Fore.CYAN}{'─' * 55}{Style.RESET_ALL}")
 
@@ -1626,8 +1623,8 @@ def main():
     
     print(BANNER)
     print(f"  {Fore.WHITE}Vítejte v {Fore.RED}WP-BREAKER PRO v{VERSION}{Style.RESET_ALL}")
-    print(f"  {Fore.DIM}HACKER-AI-DRIVEN WordPress Penetration Testing Tool{Style.RESET_ALL}")
-    print(f"  {Fore.DIM}Autoři: HackerAI Security Research Team{Style.RESET_ALL}")
+    print(f"  {Style.DIM}HACKER-AI-DRIVEN WordPress Penetration Testing Tool{Style.RESET_ALL}")
+    print(f"  {Style.DIM}Autoři: HackerAI Security Research Team{Style.RESET_ALL}")
     print(f"  {Fore.YELLOW}! Používejte pouze na systémy, ke kterým máte oprávnění !{Style.RESET_ALL}")
     print()
     
@@ -1669,13 +1666,13 @@ def main():
         
         elif choice == "1":
             run_full_scan(TARGET, output)
-            print(f"\n  {Fore.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
+            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
             input()
         
         elif choice == "2":
             fp = TcpIpFingerprinter(TARGET, output)
             fp.fingerprint()
-            print(f"\n  {Fore.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
+            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
             input()
         
         elif choice == "3":
@@ -1693,7 +1690,7 @@ def main():
             bruter = SmartBruteForcer(TARGET, usernames, passwords[:100], output)
             bruter.method = "xmlrpc"
             bruter.brute_force()
-            print(f"\n  {Fore.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
+            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
             input()
         
         elif choice == "4":
@@ -1710,31 +1707,31 @@ def main():
             bruter = SmartBruteForcer(TARGET, usernames, passwords[:100], output)
             bruter.method = "wplogin"
             bruter.brute_force()
-            print(f"\n  {Fore.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
+            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
             input()
         
         elif choice == "5":
             ce = CookieEngine(TARGET, output)
             ce.analyze_cookies()
-            print(f"\n  {Fore.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
+            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
             input()
         
         elif choice == "6":
             dom = DOMShadowAnalyzer(TARGET, output)
             dom.analyze()
-            print(f"\n  {Fore.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
+            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
             input()
         
         elif choice == "7":
             bypass = BypassResearcher(TARGET, output)
             bypass.research()
-            print(f"\n  {Fore.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
+            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
             input()
         
         elif choice == "8":
             scraper = AIContextScraper(TARGET, output)
             scraper.scrape()
-            print(f"\n  {Fore.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
+            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
             input()
         
         elif choice == "9":
@@ -1742,13 +1739,13 @@ def main():
             context = scraper.scrape()
             pwd_gen = AIPasswordGenerator(context, output)
             pwd_gen.generate()
-            print(f"\n  {Fore.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
+            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
             input()
         
         elif choice == "10":
             reporter = AIReportGenerator(TARGET, output)
             reporter.generate(output.findings, {}, [], [], {})
-            print(f"\n  {Fore.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
+            print(f"\n  {Style.DIM}Stiskněte Enter pro návrat do menu...{Style.RESET_ALL}", end="")
             input()
         
         else:
