@@ -558,7 +558,63 @@ class WPScanWrapper:
         "/wp-content/ai1wm-backups/",
         "/wp-json/wp/v2/users/", "/wp-json/wp/v2/posts/",
         "/?author=1",
-    ]
+    ]#!/usr/bin/env python3
+# =============================================================================
+# WP-BREAKER PRO v6.0 - HACKER-AI-DRIVEN SUPER EDITION
+# Multi-funkční WordPress penetration testing tool s AI inteligencí
+# 
+# Integruje:
+#   - github.com/wedikcz/wpscan    → WPScan Ruby scanner wrapper
+#   - github.com/wedikcz/BruteForceAI → LLM-powered brute-force s Playwrightem
+#   - Vlastní moduly (TCP/IP, DOM, Cookie, Bypass, AI Generator)
+#
+# Autor: HackerAI Security Research
+# Použití pouze na systémy, ke kterým máte explicitní oprávnění!
+# =============================================================================
 
-    PLUGIN_FINGERPRINTS = {
-        "akismet
+import os
+import sys
+import re
+import json
+import time
+import random
+import socket
+import hashlib
+import base64
+import urllib.parse
+import threading
+import subprocess
+import shutil
+from datetime import datetime
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Kontrola Python verze
+if sys.version_info < (3, 6):
+    print("\033[91m[!] Vyžadován Python 3.6+\033[0m")
+    sys.exit(1)
+
+# === KONTROLA A INSTALACE ZÁVISLOSTÍ ===
+REQUIRED_PACKAGES = ['requests', 'bs4', 'colorama', 'pyyaml']
+
+def check_and_install_deps():
+    """Automaticky nainstaluje chybějící balíčky"""
+    missing = []
+    for pkg in REQUIRED_PACKAGES:
+        try:
+            __import__(pkg.replace('-', '_'))
+        except ImportError:
+            missing.append(pkg)
+    
+    if missing:
+        print(f"\033[93m[!] Instaluji chybějící závislosti: {', '.join(missing)}...\033[0m")
+        for pkg in missing:
+            os.system(f"pip install {pkg} -q 2>/dev/null")
+        print("\033[92m[✓] Hotovo! Restartuji...\033[0m")
+        try:
+            os.execv(sys.executable, ['python3'] + sys.argv)
+        except Exception:
+            os.execv(sys.executable, ['python'] + sys.argv)
+
+check_and_install_deps()
+
