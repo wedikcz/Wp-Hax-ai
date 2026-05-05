@@ -34,7 +34,7 @@ Requires: Python 3.7+, requests, colorama, pyyaml, aiohttp (optional)
 """
 
 from __future__ import annotations
-import pyyaml
+
 import yaml 
 import argparse
 import asyncio
